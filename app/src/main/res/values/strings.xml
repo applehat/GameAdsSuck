@@ -1,0 +1,36 @@
+<resources>
+    <string name="app_name">GameAdsSuck</string>
+    <string name="title_app_picker">Add App to Watch</string>
+    <string name="accessibility_service_label">GameAdsSuck Ad Detector</string>
+    <string name="accessibility_service_description">Monitors foreground windows to detect advertisement interstitials in watched apps, then kills and relaunches the app to bypass the ad.</string>
+
+    <!-- Main screen -->
+    <string name="header_watched_apps">Watched Apps</string>
+    <string name="status_service_enabled">Ad Detector is active</string>
+    <string name="status_service_disabled">Ad Detector is disabled — tap to enable</string>
+    <string name="empty_watched_apps">No apps being watched.\nTap + to add a game.</string>
+    <string name="btn_add_app">Add app</string>
+    <string name="btn_remove_app">Remove</string>
+    <string name="menu_settings">Settings</string>
+
+    <!-- App picker -->
+    <string name="hint_search_apps">Search apps…</string>
+    <string name="loading_apps">Loading apps…</string>
+
+    <!-- Dialogs / messages -->
+    <string name="app_added">%s added to watch list</string>
+    <string name="app_already_watched">%s is already being watched</string>
+    <string name="app_removed">%s removed from watch list</string>
+    <string name="confirm_remove_title">Remove app?</string>
+    <string name="confirm_remove_message">Stop watching %s for ads?</string>
+    <string name="confirm_remove_yes">Remove</string>
+    <string name="confirm_remove_no">Cancel</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_id">ad_detector</string>
+    <string name="notification_channel_name">Ad Detector</string>
+    <string name="notification_title">GameAdsSuck is watching</string>
+    <string name="notification_text">Monitoring %d app(s) for ads</string>
+    <string name="notification_ad_detected_title">Ad detected!</string>
+    <string name="notification_ad_detected_text">Killed and restarting %s</string>
+</resources>
