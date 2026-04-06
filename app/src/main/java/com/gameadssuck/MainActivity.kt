@@ -2,6 +2,7 @@ package com.gameadssuck
 
 import android.Manifest
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -31,7 +32,15 @@ class MainActivity : AppCompatActivity() {
 
     /** Launcher for the POST_NOTIFICATIONS runtime permission request. */
     private val requestNotificationPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+            if (!isGranted &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) &&
+                getPreferences(MODE_PRIVATE).getBoolean(PREF_NOTIFICATION_ASKED, false)
+            ) {
+                // Permanently denied — take the user to app settings so they can enable it.
+                openNotificationSettings()
+            }
             updateNotificationStatusBanner()
         }
 
@@ -94,8 +103,18 @@ class MainActivity : AppCompatActivity() {
     /** Requests POST_NOTIFICATIONS permission on Android 13+ if not yet granted. */
     private fun requestNotificationsPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission()) {
+            getPreferences(MODE_PRIVATE).edit()
+                .putBoolean(PREF_NOTIFICATION_ASKED, true).apply()
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    /** Opens the system app-details settings so the user can manually grant permissions. */
+    private fun openNotificationSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", packageName, null)
+        }
+        startActivity(intent)
     }
 
     // -----------------------------------------------------------------------
@@ -140,5 +159,9 @@ class MainActivity : AppCompatActivity() {
         val splitter = TextUtils.SimpleStringSplitter(':')
         splitter.setString(enabledServices)
         return splitter.any { it.equals(expectedId, ignoreCase = true) }
+    }
+
+    companion object {
+        private const val PREF_NOTIFICATION_ASKED = "notification_permission_asked"
     }
 }
