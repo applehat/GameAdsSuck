@@ -183,11 +183,12 @@ class AdDetectorService : AccessibilityService() {
             if (runCatching { node.isClickable }.getOrDefault(false)) return AccessibilityNodeInfo.obtain(node)
             val parent = runCatching { node.parent }.getOrNull()
             if (runCatching { parent?.isClickable == true }.getOrDefault(false)) {
-                val clickableParent = parent
-                return try {
-                    AccessibilityNodeInfo.obtain(clickableParent)
-                } finally {
-                    clickableParent?.recycle()
+                return parent?.let {
+                    try {
+                        AccessibilityNodeInfo.obtain(it)
+                    } finally {
+                        it.recycle()
+                    }
                 }
             }
             parent?.recycle()
