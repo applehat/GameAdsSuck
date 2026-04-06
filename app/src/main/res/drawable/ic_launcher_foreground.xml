@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!--
+        Simple foreground icon: a game controller silhouette with a red X (for "ads suck").
+        Uses the safe zone of the adaptive icon (centre 72 dp).
+    -->
+    <!-- Controller body -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,28 C38,28 26,38 26,52 C26,66 34,78 46,80 C48,80.5 50,81 54,81 C58,81 60,80.5 62,80 C74,78 82,66 82,52 C82,38 70,28 54,28 Z" />
+    <!-- Left d-pad stub -->
+    <path
+        android:fillColor="#FFCE93D8"
+        android:pathData="M36,48 L44,48 L44,44 L40,44 Z" />
+    <path
+        android:fillColor="#FFCE93D8"
+        android:pathData="M38,46 L42,46 L42,54 L38,54 Z" />
+    <!-- Right buttons stub -->
+    <path
+        android:fillColor="#FFCE93D8"
+        android:pathData="M68,46 C68,44.34 66.66,43 65,43 C63.34,43 62,44.34 62,46 C62,47.66 63.34,49 65,49 C66.66,49 68,47.66 68,46 Z" />
+    <path
+        android:fillColor="#FFCE93D8"
+        android:pathData="M74,52 C74,50.34 72.66,49 71,49 C69.34,49 68,50.34 68,52 C68,53.66 69.34,55 71,55 C72.66,55 74,53.66 74,52 Z" />
+    <!-- Red X (representing the ad being closed) -->
+    <path
+        android:fillColor="#FFE53935"
+        android:pathData="M50,48 L54,52 L58,48 L60,50 L56,54 L60,58 L58,60 L54,56 L50,60 L48,58 L52,54 L48,50 Z" />
+</vector>
