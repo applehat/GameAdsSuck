@@ -3,10 +3,6 @@
 
     <!-- Kill background processes (moves apps out of memory) -->
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
-    <!-- Query all installed apps for the app picker -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-    <!-- Keep the detection service running in the foreground -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <application
         android:allowBackup="true"

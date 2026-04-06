@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
+import androidx.core.app.NotificationCompat
 
 /**
  * An AccessibilityService that monitors window state changes to detect advertisement
@@ -53,6 +54,8 @@ class AdDetectorService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         mainHandler.removeCallbacksAndMessages(null)
+        // Cancel the persistent notification since the service is stopping.
+        getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID_SERVICE)
     }
 
     // -----------------------------------------------------------------------
@@ -169,7 +172,11 @@ class AdDetectorService : AccessibilityService() {
             pendingIntent,
             ongoing = true
         )
-        startForeground(NOTIFICATION_ID_SERVICE, notification)
+        // Post a regular ongoing notification. AccessibilityServices are already kept alive
+        // by the system; startForeground() is not needed and causes crashes on Android 14
+        // (targetSdk 34) when no foreground service type is declared.
+        getSystemService(NotificationManager::class.java)
+            ?.notify(NOTIFICATION_ID_SERVICE, notification)
     }
 
     private fun showAdDetectedNotification(packageName: String) {
@@ -195,11 +202,12 @@ class AdDetectorService : AccessibilityService() {
         pendingIntent: PendingIntent?,
         ongoing: Boolean = false
     ): Notification {
-        val builder = Notification.Builder(this, getString(R.string.notification_channel_id))
+        val builder = NotificationCompat.Builder(this, getString(R.string.notification_channel_id))
             .setContentTitle(title)
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_delete)
             .setOngoing(ongoing)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
         if (pendingIntent != null) builder.setContentIntent(pendingIntent)
         return builder.build()
     }
