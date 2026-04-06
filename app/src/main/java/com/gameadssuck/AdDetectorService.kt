@@ -1,34 +1,30 @@
 package com.gameadssuck
 
-import android.annotation.SuppressLint
 import android.accessibilityservice.AccessibilityService
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 
 /**
- * An AccessibilityService that monitors watched apps for advertisement interstitials.
+ * An AccessibilityService that monitors window state changes to detect advertisement
+ * interstitials in watched apps. When an ad is detected, it navigates to the home screen,
+ * forces the watched app out of the foreground, then relaunches it to bypass the ad.
  *
- * On modern Android versions third-party apps cannot reliably kill and relaunch another app,
- * so this service now tries to dismiss ad UI directly using accessibility actions. When no
- * dismiss control is found, it falls back to a Back action and then Home if needed.
+ * Detection uses two signals:
+ *  1. The new foreground window belongs to a known ad SDK package.
+ *  2. The new foreground Activity class name contains ad-related keywords.
  */
 class AdDetectorService : AccessibilityService() {
 
-    private val watchedAppsManager by lazy {
-        WatchedAppsManager(applicationContext)
-    }
+    private lateinit var watchedAppsManager: WatchedAppsManager
 
     /** The package name of the most recently active watched app. */
     private var currentWatchedPackage: String? = null
@@ -41,14 +37,15 @@ class AdDetectorService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // -----------------------------------------------------------------------
+    // Lifecycle
+    // -----------------------------------------------------------------------
+
     override fun onServiceConnected() {
         super.onServiceConnected()
-        runCatching {
-            ensureNotificationChannel()
-            startStatusNotification()
-        }.onFailure {
-            Log.e(TAG, "Failed to initialize accessibility service", it)
-        }
+        watchedAppsManager = WatchedAppsManager(this)
+        ensureNotificationChannel()
+        startForegroundNotification()
     }
 
     override fun onInterrupt() {
@@ -58,202 +55,98 @@ class AdDetectorService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         mainHandler.removeCallbacksAndMessages(null)
-        NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID_SERVICE)
+        // Cancel the persistent notification since the service is stopping.
+        notificationManager()?.cancel(NOTIFICATION_ID_SERVICE)
     }
+
+    // -----------------------------------------------------------------------
+    // Event handling
+    // -----------------------------------------------------------------------
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         runCatching {
-            if (event == null) return
-            if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-                event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-            ) return
+            if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
             if (isHandlingAd) return
 
             val packageName = event.packageName?.toString() ?: return
-            val className = event.className?.toString().orEmpty()
+            val className = event.className?.toString() ?: ""
 
-            if (packageName == applicationContext.packageName || packageName in IGNORED_PACKAGES) {
-                return
-            }
-
-            val isWatchedPackage = watchedAppsManager.isWatched(packageName)
-            val candidateWatchedPackage = when {
-                isWatchedPackage -> packageName
-                currentWatchedPackage != null -> currentWatchedPackage
-                else -> null
-            }
-            val looksLikeAd = isAdWindow(
-                packageName = packageName,
-                className = className,
-                shouldInspectActiveWindow = candidateWatchedPackage != null
-            )
-
-            if (isWatchedPackage && !looksLikeAd) {
+            // Update tracking when user is inside a watched app.
+            if (watchedAppsManager.isWatched(packageName)) {
                 currentWatchedPackage = packageName
                 return
             }
 
-            val watchedPackage = candidateWatchedPackage ?: return
+            // Ignore our own package and the Android launcher/system UI.
+            if (packageName == applicationContext.packageName ||
+                packageName == "com.android.launcher3" ||
+                packageName == "com.android.systemui"
+            ) return
 
-            if (!looksLikeAd) return
-
-            val elapsed = System.currentTimeMillis() - lastActionTimeMs
-            if (elapsed < COOLDOWN_MS) return
-
-            handleDetectedAd(watchedPackage)
+            // Check whether this window looks like an ad interstitial.
+            val watched = currentWatchedPackage ?: return
+            if (isAdWindow(packageName, className)) {
+                val elapsed = System.currentTimeMillis() - lastActionTimeMs
+                if (elapsed < COOLDOWN_MS) return  // Respect cooldown between actions.
+                dismissAd(watched)
+            }
         }.onFailure {
-            Log.e(TAG, "Ignoring accessibility-service crash candidate", it)
-            isHandlingAd = false
+            Log.e(TAG, "Accessibility event handling failed", it)
+            resetHandlingState()
         }
     }
 
-    private fun isAdWindow(
-        packageName: String,
-        className: String,
-        shouldInspectActiveWindow: Boolean
-    ): Boolean {
+    // -----------------------------------------------------------------------
+    // Ad detection
+    // -----------------------------------------------------------------------
+
+    /**
+     * Returns true when the given package / class combination is recognised as an
+     * advertisement interstitial.
+     *
+     * Detection strategy:
+     *  - Package prefix matches a known ad-SDK namespace, OR
+     *  - Activity class name contains an ad-related keyword.
+     */
+    private fun isAdWindow(packageName: String, className: String): Boolean {
         if (AD_SDK_PACKAGES.any { packageName.startsWith(it) }) return true
         if (AD_ACTIVITY_KEYWORDS.any { className.contains(it, ignoreCase = true) }) return true
-        if (!shouldInspectActiveWindow) return false
-        return activeWindowLooksLikeAd()
-    }
-
-    private fun activeWindowLooksLikeAd(): Boolean {
-        val rootNode = safeRootInActiveWindow() ?: return false
-        var dismissNode: AccessibilityNodeInfo? = null
-        return try {
-            if (!containsAdCopy(rootNode)) return false
-            dismissNode = findDismissControl(rootNode)
-            dismissNode != null
-        } finally {
-            dismissNode?.recycle()
-            rootNode.recycle()
-        }
-    }
-
-    private fun handleDetectedAd(watchedPackageName: String) {
-        isHandlingAd = true
-        lastActionTimeMs = System.currentTimeMillis()
-        showAdDetectedNotification(watchedPackageName)
-        attemptDismissSequence(0)
-    }
-
-    private fun attemptDismissSequence(attempt: Int) {
-        if (tryAutoDismissAd()) {
-            resetAdHandling()
-            return
-        }
-
-        if (attempt < MAX_DISMISS_ATTEMPTS) {
-            mainHandler.postDelayed({ attemptDismissSequence(attempt + 1) }, DISMISS_RETRY_DELAY_MS)
-            return
-        }
-
-        if (!performGlobalAction(GLOBAL_ACTION_BACK)) {
-            performGlobalAction(GLOBAL_ACTION_HOME)
-        }
-        resetAdHandling()
-    }
-
-    private fun tryAutoDismissAd(): Boolean {
-        val rootNode = safeRootInActiveWindow() ?: return false
-        return try {
-            val dismissNode = findDismissControl(rootNode) ?: return false
-            try {
-                runCatching {
-                    dismissNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                }.getOrDefault(false)
-            } finally {
-                dismissNode.recycle()
-            }
-        } finally {
-            rootNode.recycle()
-        }
-    }
-
-    /**
-     * Searches the provided node tree for a dismiss control and returns a copied node that
-     * the caller must recycle. Intermediate child and parent nodes are recycled internally.
-     */
-    private fun findDismissControl(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-        if (node == null) return null
-
-        if (matchesDismissControl(node)) {
-            // The caller still owns and recycles `node`; this method only returns recycled copies.
-            if (runCatching { node.isClickable }.getOrDefault(false)) return AccessibilityNodeInfo.obtain(node)
-            val parent = runCatching { node.parent }.getOrNull()
-            if (runCatching { parent?.isClickable == true }.getOrDefault(false)) {
-                return parent?.let {
-                    try {
-                        AccessibilityNodeInfo.obtain(it)
-                    } finally {
-                        it.recycle()
-                    }
-                }
-            }
-            parent?.recycle()
-        }
-
-        val childCount = runCatching { node.childCount }.getOrDefault(0)
-        for (index in 0 until childCount) {
-            val child = runCatching { node.getChild(index) }.getOrNull()
-            val result = try {
-                findDismissControl(child)
-            } finally {
-                child?.recycle()
-            }
-            if (result != null) return result
-        }
-
-        return null
-    }
-
-    /**
-     * Returns true if the provided node tree contains ad-like copy. Child nodes obtained while
-     * traversing are recycled internally; the caller remains responsible for the input node.
-     */
-    private fun containsAdCopy(node: AccessibilityNodeInfo?): Boolean {
-        if (node == null) return false
-
-        val combinedText = nodeSearchText(node)
-
-        if (AD_COPY_MARKERS.any { combinedText.contains(it) }) {
-            return true
-        }
-
-        val childCount = runCatching { node.childCount }.getOrDefault(0)
-        for (index in 0 until childCount) {
-            val child = runCatching { node.getChild(index) }.getOrNull()
-            val childContainsAdCopy = try {
-                containsAdCopy(child)
-            } finally {
-                child?.recycle()
-            }
-            if (childContainsAdCopy) return true
-        }
         return false
     }
 
-    private fun matchesDismissControl(node: AccessibilityNodeInfo): Boolean {
-        return DISMISS_CONTROL_MARKERS.any { nodeSearchText(node).contains(it) }
-    }
+    // -----------------------------------------------------------------------
+    // Dismiss ad and relaunch the game
+    // -----------------------------------------------------------------------
 
-    private fun resetAdHandling() {
+    /**
+     * Handles a detected ad interstitial by backing out of the overlay when possible and
+     * falling back to Home on devices where the ad cannot be dismissed directly.
+     */
+    private fun dismissAd(packageName: String) {
+        isHandlingAd = true
+        lastActionTimeMs = System.currentTimeMillis()
+
+        showAdDetectedNotification(packageName)
+
         mainHandler.postDelayed({
-            currentWatchedPackage = null
-            isHandlingAd = false
-        }, RESET_DELAY_MS)
+            if (!performGlobalAction(GLOBAL_ACTION_BACK)) {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            }
+            resetHandlingState()
+        }, DISMISS_DELAY_MS)
     }
 
-    @SuppressLint("MissingPermission")
-    private fun startStatusNotification() {
+    // -----------------------------------------------------------------------
+    // Notifications
+    // -----------------------------------------------------------------------
+
+    private fun startForegroundNotification() {
         if (!hasNotificationPermission()) return
 
         val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
+            this, 0,
             Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            PendingIntent.FLAG_IMMUTABLE
         )
 
         val watched = watchedAppsManager.getWatchedPackages().size
@@ -263,14 +156,13 @@ class AdDetectorService : AccessibilityService() {
             pendingIntent,
             ongoing = true
         )
-        runCatching {
-            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID_SERVICE, notification)
-        }.onFailure {
-            Log.w(TAG, "Unable to post status notification", it)
-        }
+        // Post a regular ongoing notification. AccessibilityServices are already kept alive
+        // by the system; startForeground() is not needed and causes crashes on Android 14
+        // (targetSdk 34) when no foreground service type is declared.
+        notificationManager()
+            ?.notify(NOTIFICATION_ID_SERVICE, notification)
     }
 
-    @SuppressLint("MissingPermission")
     private fun showAdDetectedNotification(packageName: String) {
         if (!hasNotificationPermission()) return
 
@@ -286,11 +178,8 @@ class AdDetectorService : AccessibilityService() {
             getString(R.string.notification_ad_detected_text, appName),
             null
         )
-        runCatching {
-            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID_AD_DETECTED, notification)
-        }.onFailure {
-            Log.w(TAG, "Unable to post ad notification", it)
-        }
+        notificationManager()
+            ?.notify(NOTIFICATION_ID_AD_DETECTED, notification)
     }
 
     /** Creates the notification channel on Android 8+. Safe to call multiple times. */
@@ -321,51 +210,25 @@ class AdDetectorService : AccessibilityService() {
         return builder.build()
     }
 
+    private fun resetHandlingState() {
+        currentWatchedPackage = null
+        isHandlingAd = false
+    }
+
     private fun notificationManager(): NotificationManager? =
-        getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
 
-    private fun safeRootInActiveWindow(): AccessibilityNodeInfo? =
-        runCatching { rootInActiveWindow }.getOrNull()
-
-    private fun nodeSearchText(node: AccessibilityNodeInfo): String =
-        sequenceOf(
-            runCatching { node.text?.toString() }.getOrNull(),
-            runCatching { node.contentDescription?.toString() }.getOrNull(),
-            runCatching { node.viewIdResourceName }.getOrNull()
-        ).filterNotNull().joinToString(" ").lowercase()
+    // -----------------------------------------------------------------------
+    // Constants
+    // -----------------------------------------------------------------------
 
     companion object {
         private const val TAG = "AdDetectorService"
-        private const val DISMISS_RETRY_DELAY_MS = 700L
-        private const val RESET_DELAY_MS = 1_500L
+        private const val DISMISS_DELAY_MS = 600L
         private const val COOLDOWN_MS = 5_000L
-        private const val MAX_DISMISS_ATTEMPTS = 3
 
         private const val NOTIFICATION_ID_SERVICE = 1001
         private const val NOTIFICATION_ID_AD_DETECTED = 1002
-
-        private val IGNORED_PACKAGES = setOf(
-            "com.android.launcher3",
-            "com.android.systemui"
-        )
-
-        private val DISMISS_CONTROL_MARKERS = listOf(
-            "close",
-            "skip",
-            "dismiss",
-            "no thanks",
-            "not now"
-        )
-
-        private val AD_COPY_MARKERS = listOf(
-            "advertisement",
-            "sponsored",
-            "rewarded",
-            "install",
-            "play now",
-            "learn more",
-            "ad choices"
-        )
 
         /**
          * Known ad-SDK package prefixes. A window whose package starts with any of
@@ -394,6 +257,9 @@ class AdDetectorService : AccessibilityService() {
         /**
          * Keywords that, when present in a foreground Activity's class name, indicate
          * an advertisement interstitial regardless of the hosting package.
+         *
+         * This catches ad SDKs that run inside the game's own process (e.g. Google
+         * AdMob's com.google.android.gms.ads.AdActivity).
          */
         val AD_ACTIVITY_KEYWORDS = listOf(
             "AdActivity",
