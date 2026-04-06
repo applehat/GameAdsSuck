@@ -77,18 +77,23 @@ class AdDetectorService : AccessibilityService() {
             }
 
             val isWatchedPackage = watchedAppsManager.isWatched(packageName)
-            val looksLikeAd = isAdWindow(packageName, className, isWatchedPackage)
+            val candidateWatchedPackage = when {
+                isWatchedPackage -> packageName
+                currentWatchedPackage != null -> currentWatchedPackage
+                else -> null
+            }
+            val looksLikeAd = isAdWindow(
+                packageName = packageName,
+                className = className,
+                shouldInspectActiveWindow = candidateWatchedPackage != null
+            )
 
             if (isWatchedPackage && !looksLikeAd) {
                 currentWatchedPackage = packageName
                 return
             }
 
-            val watchedPackage = when {
-                isWatchedPackage -> packageName
-                currentWatchedPackage != null -> currentWatchedPackage
-                else -> null
-            } ?: return
+            val watchedPackage = candidateWatchedPackage ?: return
 
             if (!looksLikeAd) return
 
@@ -105,11 +110,11 @@ class AdDetectorService : AccessibilityService() {
     private fun isAdWindow(
         packageName: String,
         className: String,
-        isWatchedPackage: Boolean
+        shouldInspectActiveWindow: Boolean
     ): Boolean {
         if (AD_SDK_PACKAGES.any { packageName.startsWith(it) }) return true
         if (AD_ACTIVITY_KEYWORDS.any { className.contains(it, ignoreCase = true) }) return true
-        if (!isWatchedPackage) return false
+        if (!shouldInspectActiveWindow) return false
         return activeWindowLooksLikeAd()
     }
 
@@ -174,13 +179,15 @@ class AdDetectorService : AccessibilityService() {
         if (node == null) return null
 
         if (matchesDismissControl(node)) {
+            // The caller still owns and recycles `node`; this method only returns recycled copies.
             if (runCatching { node.isClickable }.getOrDefault(false)) return AccessibilityNodeInfo.obtain(node)
             val parent = runCatching { node.parent }.getOrNull()
             if (runCatching { parent?.isClickable == true }.getOrDefault(false)) {
+                val clickableParent = parent
                 return try {
-                    AccessibilityNodeInfo.obtain(parent!!)
+                    AccessibilityNodeInfo.obtain(clickableParent)
                 } finally {
-                    parent?.recycle()
+                    clickableParent?.recycle()
                 }
             }
             parent?.recycle()
