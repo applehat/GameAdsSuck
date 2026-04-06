@@ -358,16 +358,6 @@ class AdDetectorService : AccessibilityService() {
         }
     }
 
-    /** Schedule a verification check — if the ad is still showing, proceed to next step. */
-    private fun scheduleVerification(watchedPackage: String) {
-        mainHandler.postDelayed({
-            if (!isHandlingAd) return@postDelayed
-            // If the user has gone back to the watched app, we're done.
-            // Otherwise try the next step.
-            executeAutoDismissStep(watchedPackage)
-        }, VERIFY_DELAY_MS)
-    }
-
     // -----------------------------------------------------------------------
     // Strategy 1: Find and click Close/Skip/X buttons in accessibility tree
     // -----------------------------------------------------------------------
