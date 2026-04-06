@@ -43,9 +43,13 @@ class AdDetectorService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        watchedAppsManager = WatchedAppsManager(this)
-        ensureNotificationChannel()
-        startForegroundNotification()
+        runCatching {
+            watchedAppsManager = WatchedAppsManager(this)
+            ensureNotificationChannel()
+            startForegroundNotification()
+        }.onFailure {
+            Log.e(TAG, "Failed to initialize accessibility service", it)
+        }
     }
 
     override fun onInterrupt() {
@@ -65,7 +69,10 @@ class AdDetectorService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         runCatching {
-            if (!::watchedAppsManager.isInitialized) return
+            if (!::watchedAppsManager.isInitialized) {
+                Log.w(TAG, "Dropping accessibility event before service initialization")
+                return
+            }
             if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
             if (isHandlingAd) return
 
