@@ -1,26 +1,38 @@
 package com.gameadssuck
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.graphics.Path
+import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.app.NotificationCompat
 
 /**
- * An AccessibilityService that monitors window state changes to detect advertisement
- * interstitials in watched apps. When an ad is detected, it navigates to the home screen,
- * forces the watched app out of the foreground, then relaunches it to bypass the ad.
+ * Aggressive AccessibilityService that uses every available strategy to detect and
+ * dismiss advertisement interstitials in watched apps.
  *
- * Detection uses two signals:
- *  1. The new foreground window belongs to a known ad SDK package.
+ * Detection uses three signals:
+ *  1. The new foreground window belongs to a known ad-SDK package.
  *  2. The new foreground Activity class name contains ad-related keywords.
+ *  3. The window content tree contains known close/dismiss/skip elements.
+ *
+ * Dismissal cascades through increasingly aggressive strategies:
+ *  1. Find and click a Close/Skip/X button in the accessibility tree.
+ *  2. Gesture-tap common close-button screen coordinates (top-right corner).
+ *  3. Perform BACK action (repeated).
+ *  4. Kill the ad process and relaunch the watched game.
+ *  5. HOME as a last resort.
  */
 class AdDetectorService : AccessibilityService() {
 
@@ -35,6 +47,12 @@ class AdDetectorService : AccessibilityService() {
     /** Timestamp of the last action, used to enforce a cooldown period. */
     private var lastActionTimeMs = 0L
 
+    /** Counter for how many dismiss steps we've tried in the current ad sequence. */
+    private var dismissAttempt = 0
+
+    /** The package of the detected ad (for kill fallback). */
+    private var currentAdPackage: String? = null
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // -----------------------------------------------------------------------
@@ -47,6 +65,7 @@ class AdDetectorService : AccessibilityService() {
             watchedAppsManager = WatchedAppsManager(this)
             ensureNotificationChannel()
             startForegroundNotification()
+            Log.i(TAG, "AdDetectorService connected and ready")
         }.onFailure {
             Log.e(TAG, "Failed to initialize accessibility service", it)
         }
@@ -59,7 +78,6 @@ class AdDetectorService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         mainHandler.removeCallbacksAndMessages(null)
-        // Cancel the persistent notification since the service is stopping.
         notificationManager()?.cancel(NOTIFICATION_ID_SERVICE)
     }
 
@@ -69,15 +87,12 @@ class AdDetectorService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         runCatching {
-            if (!::watchedAppsManager.isInitialized) {
-                Log.w(TAG, "Dropping accessibility event before service initialization")
-                return
-            }
-            if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-            if (isHandlingAd) return
+            if (!::watchedAppsManager.isInitialized) return
+            if (event == null) return
 
             val packageName = event.packageName?.toString() ?: return
             val className = event.className?.toString() ?: ""
+            val eventType = event.eventType
 
             // Update tracking when user is inside a watched app.
             if (watchedAppsManager.isWatched(packageName)) {
@@ -85,21 +100,31 @@ class AdDetectorService : AccessibilityService() {
                 return
             }
 
-            // Ignore our own package and the Android launcher/system UI.
-            if (packageName == applicationContext.packageName ||
-                packageName == "com.android.launcher3" ||
-                packageName == "com.android.systemui"
-            ) return
+            // Ignore our own package and system chrome.
+            if (isSystemPackage(packageName)) return
 
-            // Check whether this window looks like an ad interstitial.
-            val watched = currentWatchedPackage ?: return
-            if (isAdWindow(packageName, className)) {
-                val elapsed = System.currentTimeMillis() - lastActionTimeMs
-                if (elapsed < COOLDOWN_MS) return  // Respect cooldown between actions.
-                dismissAd(watched)
+            // === WINDOW STATE CHANGED — primary ad detection ===
+            if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                val watched = currentWatchedPackage ?: return
+
+                if (isAdWindow(packageName, className)) {
+                    val elapsed = System.currentTimeMillis() - lastActionTimeMs
+                    if (elapsed < COOLDOWN_MS) return
+                    if (isHandlingAd) return
+
+                    Log.i(TAG, "Ad detected! pkg=$packageName class=$className")
+                    currentAdPackage = packageName
+                    startDismissSequence(watched)
+                }
+            }
+
+            // === WINDOW CONTENT CHANGED — opportunistic close-button scanning ===
+            if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED && isHandlingAd) {
+                // While we're handling an ad, keep scanning for newly-appeared close buttons.
+                tryClickCloseButton(event.source)
             }
         }.onFailure {
-            Log.e(TAG, "Accessibility event handling failed", it)
+            Log.e(TAG, "Event handling failed", it)
             resetHandlingState()
         }
     }
@@ -108,40 +133,375 @@ class AdDetectorService : AccessibilityService() {
     // Ad detection
     // -----------------------------------------------------------------------
 
-    /**
-     * Returns true when the given package / class combination is recognised as an
-     * advertisement interstitial.
-     *
-     * Detection strategy:
-     *  - Package prefix matches a known ad-SDK namespace, OR
-     *  - Activity class name contains an ad-related keyword.
-     */
     private fun isAdWindow(packageName: String, className: String): Boolean {
+        // Signal 1: Known ad-SDK package prefix.
         if (AD_SDK_PACKAGES.any { packageName.startsWith(it) }) return true
+        // Signal 2: Activity class name contains ad keyword.
         if (AD_ACTIVITY_KEYWORDS.any { className.contains(it, ignoreCase = true) }) return true
+        // Signal 3: The ad is from Google Play Services (AdMob, etc.)
+        if (packageName == "com.google.android.gms" &&
+            AD_ACTIVITY_KEYWORDS.any { className.contains(it, ignoreCase = true) }) return true
+        return false
+    }
+
+    private fun isSystemPackage(packageName: String): Boolean {
+        return packageName == applicationContext.packageName ||
+                packageName == "com.android.launcher3" ||
+                packageName == "com.android.launcher" ||
+                packageName == "com.google.android.apps.nexuslauncher" ||
+                packageName == "com.android.systemui" ||
+                packageName == "com.android.settings" ||
+                packageName == "com.sec.android.app.launcher" || // Samsung
+                packageName == "com.huawei.android.launcher" || // Huawei
+                packageName == "com.miui.home" // Xiaomi
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-strategy dismiss sequence
+    // -----------------------------------------------------------------------
+
+    /**
+     * Kicks off a cascading dismiss sequence that tries increasingly aggressive
+     * strategies to get rid of the ad.
+     */
+    private fun startDismissSequence(watchedPackage: String) {
+        isHandlingAd = true
+        lastActionTimeMs = System.currentTimeMillis()
+        dismissAttempt = 0
+
+        showAdDetectedNotification(watchedPackage)
+
+        // Strategy 1: Immediately try to find and click a close button.
+        mainHandler.postDelayed({
+            executeDismissStep(watchedPackage)
+        }, INITIAL_SCAN_DELAY_MS)
+    }
+
+    /**
+     * Executes the current dismiss step and schedules the next one if needed.
+     * Each step is progressively more aggressive.
+     */
+    private fun executeDismissStep(watchedPackage: String) {
+        if (!isHandlingAd) return
+
+        dismissAttempt++
+        Log.i(TAG, "Dismiss attempt #$dismissAttempt for ad in $watchedPackage")
+
+        when (dismissAttempt) {
+            // Step 1: Scan tree for close/skip buttons.
+            1 -> {
+                val clicked = scanAndClickCloseButton()
+                if (clicked) {
+                    Log.i(TAG, "Step 1: Found and clicked close button")
+                    scheduleVerification(watchedPackage)
+                } else {
+                    // Try next step immediately.
+                    mainHandler.postDelayed({ executeDismissStep(watchedPackage) }, STEP_DELAY_MS)
+                }
+            }
+            // Step 2: Try gesture taps on common close-button locations.
+            2 -> {
+                val tapped = tryGestureTapClosePositions()
+                if (tapped) {
+                    Log.i(TAG, "Step 2: Gesture-tapped close position")
+                }
+                // Always proceed to verify / next step.
+                scheduleVerification(watchedPackage)
+            }
+            // Step 3: Hit BACK button.
+            3 -> {
+                Log.i(TAG, "Step 3: BACK action")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                scheduleVerification(watchedPackage)
+            }
+            // Step 4: Hit BACK again (some ads need two).
+            4 -> {
+                Log.i(TAG, "Step 4: Second BACK action")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                scheduleVerification(watchedPackage)
+            }
+            // Step 5: Scan tree one more time (close button may have appeared after a timer).
+            5 -> {
+                val clicked = scanAndClickCloseButton()
+                Log.i(TAG, "Step 5: Re-scan tree, found=$clicked")
+                if (!clicked) {
+                    mainHandler.postDelayed({ executeDismissStep(watchedPackage) }, STEP_DELAY_MS)
+                } else {
+                    scheduleVerification(watchedPackage)
+                }
+            }
+            // Step 6: Kill the ad process and relaunch the game.
+            6 -> {
+                Log.i(TAG, "Step 6: Kill + relaunch")
+                killAndRelaunch(watchedPackage)
+            }
+            // Step 7: Final fallback — go HOME.
+            else -> {
+                Log.i(TAG, "Step 7: HOME fallback")
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                mainHandler.postDelayed({
+                    relaunchApp(watchedPackage)
+                    resetHandlingState()
+                }, RELAUNCH_DELAY_MS)
+            }
+        }
+    }
+
+    /** Schedule a verification check — if the ad is still showing, proceed to next step. */
+    private fun scheduleVerification(watchedPackage: String) {
+        mainHandler.postDelayed({
+            if (!isHandlingAd) return@postDelayed
+            // If the user has gone back to the watched app, we're done.
+            // Otherwise try the next step.
+            executeDismissStep(watchedPackage)
+        }, VERIFY_DELAY_MS)
+    }
+
+    // -----------------------------------------------------------------------
+    // Strategy 1: Find and click Close/Skip/X buttons in accessibility tree
+    // -----------------------------------------------------------------------
+
+    /**
+     * Walks the entire accessibility tree looking for clickable nodes that
+     * look like ad close/skip buttons. Clicks the first one found.
+     */
+    private fun scanAndClickCloseButton(): Boolean {
+        return runCatching {
+            val rootNode = rootInActiveWindow ?: return false
+            val result = findCloseButtonInTree(rootNode)
+            safeRecycle(rootNode)
+            result
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Attempts to click a close button on a specific node (used during
+     * content-changed events for opportunistic scanning).
+     */
+    private fun tryClickCloseButton(node: AccessibilityNodeInfo?) {
+        runCatching {
+            node ?: return
+            findCloseButtonInTree(node)
+            safeRecycle(node)
+        }
+    }
+
+    /**
+     * Recursively searches for close/dismiss/skip buttons.
+     * Returns true if a button was found and clicked.
+     */
+    private fun findCloseButtonInTree(node: AccessibilityNodeInfo): Boolean {
+        return runCatching {
+            // Check this node.
+            if (isCloseButton(node)) {
+                if (clickNode(node)) return true
+            }
+
+            // Search children.
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                if (findCloseButtonInTree(child)) {
+                    safeRecycle(child)
+                    return true
+                }
+                safeRecycle(child)
+            }
+            false
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Determines if a node looks like a close/dismiss/skip button for an ad.
+     */
+    private fun isCloseButton(node: AccessibilityNodeInfo): Boolean {
+        // Must be visible and either clickable or has a clickable parent.
+        if (!node.isVisibleToUser) return false
+
+        val text = node.text?.toString()?.trim() ?: ""
+        val desc = node.contentDescription?.toString()?.trim() ?: ""
+        val viewId = node.viewIdResourceName?.toString() ?: ""
+        val className = node.className?.toString() ?: ""
+
+        // Check text content.
+        val textLower = text.lowercase()
+        val descLower = desc.lowercase()
+        val idLower = viewId.lowercase()
+
+        // ===  Close/skip/dismiss signals ===
+        for (keyword in CLOSE_BUTTON_TEXTS) {
+            if (textLower.contains(keyword)) return isClickableOrParent(node)
+            if (descLower.contains(keyword)) return isClickableOrParent(node)
+        }
+
+        // Check resource IDs for close button patterns.
+        for (keyword in CLOSE_BUTTON_IDS) {
+            if (idLower.contains(keyword)) return isClickableOrParent(node)
+        }
+
+        // Tiny views (< 100dp) with "X" or "✕" text are almost certainly close buttons.
+        if (text.length <= 2 && (text == "X" || text == "x" || text == "✕" || text == "✖" || text == "×" || text == "╳")) {
+            return isClickableOrParent(node)
+        }
+
+        // Small ImageView/ImageButton in the top-right corner → likely close button.
+        if ((className.contains("ImageView") || className.contains("ImageButton")) &&
+            isInTopRightCorner(node)) {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            val w = bounds.width()
+            val h = bounds.height()
+            // Small icon-sized button.
+            if (w in 20..200 && h in 20..200) {
+                return isClickableOrParent(node)
+            }
+        }
+
+        return false
+    }
+
+    private fun isClickableOrParent(node: AccessibilityNodeInfo): Boolean {
+        if (node.isClickable) return true
+        // Walk up to check if a parent wrapper is clickable.
+        var parent = node.parent
+        var depth = 0
+        while (parent != null && depth < 3) {
+            if (parent.isClickable) {
+                safeRecycle(parent)
+                return true
+            }
+            val next = parent.parent
+            safeRecycle(parent)
+            parent = next
+            depth++
+        }
+        safeRecycle(parent)
+        return false
+    }
+
+    private fun isInTopRightCorner(node: AccessibilityNodeInfo): Boolean {
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        val displayMetrics = resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels
+        // Top-right: x > 70% of screen, y < 20% of screen.
+        return bounds.left > screenWidth * 0.65 && bounds.top < displayMetrics.heightPixels * 0.25
+    }
+
+    /**
+     * Clicks a node. If the node itself isn't clickable, clicks its clickable parent.
+     */
+    private fun clickNode(node: AccessibilityNodeInfo): Boolean {
+        if (node.isClickable) {
+            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        // Walk up to find a clickable ancestor.
+        var parent = node.parent
+        var depth = 0
+        while (parent != null && depth < 3) {
+            if (parent.isClickable) {
+                val result = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                safeRecycle(parent)
+                return result
+            }
+            val next = parent.parent
+            safeRecycle(parent)
+            parent = next
+            depth++
+        }
+        safeRecycle(parent)
         return false
     }
 
     // -----------------------------------------------------------------------
-    // Dismiss ad and relaunch the game
+    // Strategy 2: Gesture tap on common close-button positions
     // -----------------------------------------------------------------------
 
     /**
-     * Handles a detected ad interstitial by backing out of the overlay when possible and
-     * falling back to Home on devices where the ad cannot be dismissed directly.
+     * Dispatches gesture taps on positions where close buttons typically appear:
+     *  - Top-right corner (most common for interstitial ads)
+     *  - Top-left corner (some ad networks)
      */
-    private fun dismissAd(packageName: String) {
-        isHandlingAd = true
-        lastActionTimeMs = System.currentTimeMillis()
+    private fun tryGestureTapClosePositions(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false // Gestures require API 24+.
 
-        showAdDetectedNotification(packageName)
+        val displayMetrics = resources.displayMetrics
+        val screenW = displayMetrics.widthPixels.toFloat()
 
+        var dispatched = false
+
+        // Top-right corner — most common close button position.
+        dispatched = dispatchTap(screenW - 50f, 90f) || dispatched
+        // Slightly inset from top-right (padded ads).
         mainHandler.postDelayed({
-            if (!performGlobalAction(GLOBAL_ACTION_BACK)) {
-                performGlobalAction(GLOBAL_ACTION_HOME)
-            }
+            runCatching { dispatchTap(screenW - 100f, 140f) }
+        }, 200)
+        // Top-left corner (some networks).
+        mainHandler.postDelayed({
+            runCatching { dispatchTap(80f, 90f) }
+        }, 400)
+
+        return dispatched
+    }
+
+    private fun dispatchTap(x: Float, y: Float): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
+        return runCatching {
+            val path = Path().apply { moveTo(x, y) }
+            val stroke = GestureDescription.StrokeDescription(path, 0, 50)
+            val gesture = GestureDescription.Builder().addStroke(stroke).build()
+            dispatchGesture(gesture, null, null)
+        }.getOrDefault(false)
+    }
+
+    // -----------------------------------------------------------------------
+    // Strategy 3: Kill process and relaunch
+    // -----------------------------------------------------------------------
+
+    private fun killAndRelaunch(watchedPackage: String) {
+        runCatching {
+            // Go HOME first so the ad isn't in the foreground.
+            performGlobalAction(GLOBAL_ACTION_HOME)
+
+            mainHandler.postDelayed({
+                runCatching {
+                    // Kill the ad's background process if possible.
+                    val adPkg = currentAdPackage
+                    if (adPkg != null) {
+                        val am = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
+                        am?.killBackgroundProcesses(adPkg)
+                        Log.i(TAG, "Killed background processes of $adPkg")
+                    }
+                }
+
+                // Relaunch the game after a short delay.
+                mainHandler.postDelayed({
+                    relaunchApp(watchedPackage)
+                    resetHandlingState()
+                }, RELAUNCH_DELAY_MS)
+            }, KILL_DELAY_MS)
+        }.onFailure {
+            Log.e(TAG, "Kill + relaunch failed", it)
             resetHandlingState()
-        }, DISMISS_DELAY_MS)
+        }
+    }
+
+    private fun relaunchApp(packageName: String) {
+        runCatching {
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+            if (launchIntent != null) {
+                launchIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                )
+                startActivity(launchIntent)
+                Log.i(TAG, "Relaunched $packageName")
+            } else {
+                Log.w(TAG, "No launch intent for $packageName")
+            }
+        }.onFailure {
+            Log.e(TAG, "Failed to relaunch $packageName", it)
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -164,33 +524,25 @@ class AdDetectorService : AccessibilityService() {
             pendingIntent,
             ongoing = true
         )
-        // Post a regular ongoing notification. AccessibilityServices are already kept alive
-        // by the system; startForeground() is not needed and causes crashes on Android 14
-        // (targetSdk 34) when no foreground service type is declared.
-        notificationManager()
-            ?.notify(NOTIFICATION_ID_SERVICE, notification)
+        notificationManager()?.notify(NOTIFICATION_ID_SERVICE, notification)
     }
 
     private fun showAdDetectedNotification(packageName: String) {
         if (!hasNotificationPermission()) return
 
-        val appName = try {
+        val appName = runCatching {
             val info = packageManager.getApplicationInfo(packageName, 0)
             packageManager.getApplicationLabel(info).toString()
-        } catch (e: Exception) {
-            packageName
-        }
+        }.getOrDefault(packageName)
 
         val notification = buildNotification(
             getString(R.string.notification_ad_detected_title),
             getString(R.string.notification_ad_detected_text, appName),
             null
         )
-        notificationManager()
-            ?.notify(NOTIFICATION_ID_AD_DETECTED, notification)
+        notificationManager()?.notify(NOTIFICATION_ID_AD_DETECTED, notification)
     }
 
-    /** Creates the notification channel on Android 8+. Safe to call multiple times. */
     private fun ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -218,13 +570,24 @@ class AdDetectorService : AccessibilityService() {
         return builder.build()
     }
 
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
     private fun resetHandlingState() {
-        currentWatchedPackage = null
         isHandlingAd = false
+        dismissAttempt = 0
+        currentAdPackage = null
+        mainHandler.removeCallbacksAndMessages(null)
     }
 
     private fun notificationManager(): NotificationManager? =
         getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
+
+    @Suppress("DEPRECATION")
+    private fun safeRecycle(node: AccessibilityNodeInfo?) {
+        runCatching { node?.recycle() }
+    }
 
     // -----------------------------------------------------------------------
     // Constants
@@ -232,42 +595,83 @@ class AdDetectorService : AccessibilityService() {
 
     companion object {
         private const val TAG = "AdDetectorService"
-        private const val DISMISS_DELAY_MS = 600L
-        private const val COOLDOWN_MS = 5_000L
+
+        private const val INITIAL_SCAN_DELAY_MS = 300L
+        private const val STEP_DELAY_MS = 400L
+        private const val VERIFY_DELAY_MS = 800L
+        private const val KILL_DELAY_MS = 500L
+        private const val RELAUNCH_DELAY_MS = 600L
+        private const val COOLDOWN_MS = 4_000L
 
         private const val NOTIFICATION_ID_SERVICE = 1001
         private const val NOTIFICATION_ID_AD_DETECTED = 1002
 
         /**
          * Known ad-SDK package prefixes. A window whose package starts with any of
-         * these strings is treated as an advertisement interstitial.
+         * these is treated as an ad interstitial.
          */
         val AD_SDK_PACKAGES = listOf(
+            // Google
+            "com.google.android.gms.ads",
+            // Unity
             "com.unity3d.ads",
-            "com.vungle",
+            "com.unity3d.services",
+            // AppLovin / MAX
             "com.applovin",
-            "com.chartboost",
-            "com.mopub",
+            // ironSource / LevelPlay
             "com.ironsource",
-            "com.startapp",
-            "com.inmobi",
-            "com.tapjoy",
-            "com.fyber",
+            "com.ironsrc",
+            // Vungle / Liftoff
+            "com.vungle",
+            // Chartboost
+            "com.chartboost",
+            // AdColony / Digital Turbine
             "com.adcolony",
-            "com.mintegral",
             "com.digitalturbine",
-            "com.supersonic",
+            "com.fyber",
+            // InMobi
+            "com.inmobi",
+            // Mintegral
+            "com.mintegral",
+            "com.mbridge",
+            // Meta / Facebook Audience Network
+            "com.facebook.ads",
+            // Amazon
+            "com.amazon.device.ads",
+            // Pangle / ByteDance
+            "com.bytedance.sdk",
+            "com.pangle",
+            // MoPub (legacy, now AppLovin)
+            "com.mopub",
+            // StartApp
+            "com.startapp",
+            // Tapjoy / Mistplay
+            "com.tapjoy",
+            // PubNative / Verve
             "net.pubnative",
+            // Ogury
             "com.ogury",
-            "com.pangle"
+            // SupersonicAds (ironSource legacy)
+            "com.supersonic",
+            // Smaato
+            "com.smaato",
+            // Yandex
+            "com.yandex.mobile.ads",
+            // Snap
+            "com.snap.adkit",
+            // Kidoz
+            "com.kidoz",
+            // Liftoff / Vungle
+            "com.liftoff",
+            // Verve Group
+            "net.pubnative",
+            // Bigo Ads
+            "sg.bigo.ads"
         )
 
         /**
          * Keywords that, when present in a foreground Activity's class name, indicate
-         * an advertisement interstitial regardless of the hosting package.
-         *
-         * This catches ad SDKs that run inside the game's own process (e.g. Google
-         * AdMob's com.google.android.gms.ads.AdActivity).
+         * an ad interstitial regardless of the hosting package.
          */
         val AD_ACTIVITY_KEYWORDS = listOf(
             "AdActivity",
@@ -282,7 +686,80 @@ class AdDetectorService : AccessibilityService() {
             "AdWebView",
             "BannerAdActivity",
             "RewardVideo",
-            "OfferWall"
+            "OfferWall",
+            "AdViewActivity",
+            "RichMediaActivity",
+            "InterstitialActivity",
+            "RewardActivity",
+            "UnityAdsActivity",
+            "ApplovinActivity",
+            "MaxFullscreenAd",
+            "IronSourceActivity",
+            "VungleActivity",
+            "ChartboostActivity",
+            "InMobiActivity",
+            "AdOverlay",
+            "AdPopup",
+            "PlayableAd",
+            "EndCard",
+            "SkippableActivity",
+            "com.google.android.gms.ads"
+        )
+
+        /**
+         * Text patterns found on close/dismiss/skip buttons in ads.
+         * Matched case-insensitively against node text and content descriptions.
+         */
+        val CLOSE_BUTTON_TEXTS = listOf(
+            "close",
+            "skip",
+            "skip ad",
+            "skip ads",
+            "skip video",
+            "dismiss",
+            "no thanks",
+            "no, thanks",
+            "not now",
+            "continue",
+            "x",
+            "✕",
+            "✖",
+            "×",
+            "╳",
+            "close ad",
+            "close this ad",
+            "fermer",      // French
+            "cerrar",      // Spanish
+            "schließen",   // German
+            "chiudi",      // Italian
+            "fechar",      // Portuguese
+            "閉じる",       // Japanese
+            "关闭",         // Chinese
+            "닫기",         // Korean
+        )
+
+        /**
+         * Resource ID substrings that typically identify close/dismiss buttons.
+         */
+        val CLOSE_BUTTON_IDS = listOf(
+            "close",
+            "skip",
+            "dismiss",
+            "btn_close",
+            "close_btn",
+            "skip_btn",
+            "btn_skip",
+            "iv_close",
+            "close_button",
+            "skip_button",
+            "ad_close",
+            "interstitial_close",
+            "reward_close",
+            "btn_x",
+            "closeButton",
+            "skipButton",
+            "close_image",
+            "btnClose"
         )
     }
 }

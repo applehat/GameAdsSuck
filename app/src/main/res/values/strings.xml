@@ -2,7 +2,7 @@
     <string name="app_name">GameAdsSuck</string>
     <string name="title_app_picker">Add App to Watch</string>
     <string name="accessibility_service_label">GameAdsSuck Ad Detector</string>
-    <string name="accessibility_service_description">Monitors watched apps for ad overlays and tries to dismiss them with accessibility actions that work on modern Android.</string>
+    <string name="accessibility_service_description">Monitors watched apps for ad overlays and aggressively dismisses them. Scans window content for close/skip buttons, taps common close positions, presses Back, and can force-restart the game as a last resort.</string>
 
     <!-- Main screen -->
     <string name="header_watched_apps">Watched Apps</string>
