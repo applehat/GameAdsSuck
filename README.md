@@ -1,5 +1,7 @@
 # GameAdsSuck
 
+[![Build](https://github.com/applehat/GameAdsSuck/actions/workflows/build.yml/badge.svg)](https://github.com/applehat/GameAdsSuck/actions/workflows/build.yml)
+
 An Android app that watches your mobile games and automatically kills and relaunches them the moment an advertisement interstitial appears — so you never have to sit through an intrusive ad again.
 
 ---
@@ -38,6 +40,27 @@ The ad never gets a chance to play.
 | `QUERY_ALL_PACKAGES` | List installed apps in the picker |
 | `FOREGROUND_SERVICE` | Keep the detector running reliably |
 | Accessibility Service | Observe window state changes to detect ad interstitials |
+
+---
+
+## Installing a pre-built APK
+
+Pre-built APKs are attached to every [GitHub Release](https://github.com/applehat/GameAdsSuck/releases).
+To install:
+1. Open the latest release on GitHub.
+2. Download `GameAdsSuck-<version>.apk` from the **Assets** section.
+3. Transfer the file to your Android device and open it. You may need to allow **Install from unknown sources** in your device settings.
+
+---
+
+## CI / GitHub Actions
+
+| Workflow | Trigger | Output |
+|---|---|---|
+| **Build** | Every push and pull request | Debug APK uploaded as a build artifact (14-day retention) |
+| **Release** | GitHub Release published | Release APK attached to the release as a downloadable asset |
+
+The release APK is signed with the debug signing key so it can be sideloaded on any Android device.
 
 ---
 
