@@ -27,6 +27,17 @@
     <string name="confirm_remove_yes">Remove</string>
     <string name="confirm_remove_no">Cancel</string>
 
+    <!-- Per-app ad strategies -->
+    <string name="strategy_auto">Auto (all tricks)</string>
+    <string name="strategy_auto_desc">Full cascade: find close button → gesture taps → BACK → re-scan → kill &amp; relaunch → HOME</string>
+    <string name="strategy_instant_kill">Instant Kill &amp; Restart</string>
+    <string name="strategy_instant_kill_desc">Immediately kills the game and relaunches it — fastest way past an ad</string>
+    <string name="strategy_close_and_back">Close Button + Back</string>
+    <string name="strategy_close_and_back_desc">Tries to find a close/skip button, then presses Back. Never kills the app.</string>
+    <string name="strategy_back_only">Back Only</string>
+    <string name="strategy_back_only_desc">Just presses Back to dismiss the ad. Simplest but may not work on all ad networks.</string>
+    <string name="strategy_dialog_title">Ad dismiss strategy</string>
+
     <!-- Notifications -->
     <string name="notification_channel_id">ad_detector</string>
     <string name="notification_channel_name">Ad Detector</string>

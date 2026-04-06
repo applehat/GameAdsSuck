@@ -170,8 +170,8 @@ class AdDetectorService : AccessibilityService() {
     // -----------------------------------------------------------------------
 
     /**
-     * Kicks off a cascading dismiss sequence that tries increasingly aggressive
-     * strategies to get rid of the ad.
+     * Kicks off a dismiss sequence using the per-app strategy configured
+     * for the watched package.
      */
     private fun startDismissSequence(watchedPackage: String) {
         isHandlingAd = true
@@ -180,73 +180,86 @@ class AdDetectorService : AccessibilityService() {
 
         showAdDetectedNotification(watchedPackage)
 
-        // Strategy 1: Immediately try to find and click a close button.
-        mainHandler.postDelayed({
-            executeDismissStep(watchedPackage)
-        }, INITIAL_SCAN_DELAY_MS)
+        val strategy = watchedAppsManager.getStrategy(watchedPackage)
+        Log.i(TAG, "Using strategy ${strategy.key} for $watchedPackage")
+
+        when (strategy) {
+            AdStrategy.INSTANT_KILL -> {
+                // Skip all close-button logic — immediately kill + relaunch.
+                mainHandler.postDelayed({
+                    killAndRelaunch(watchedPackage)
+                }, INSTANT_KILL_DELAY_MS)
+            }
+            AdStrategy.BACK_ONLY -> {
+                // Just press BACK a couple of times.
+                mainHandler.postDelayed({
+                    executeBackOnlyStep(watchedPackage)
+                }, INITIAL_SCAN_DELAY_MS)
+            }
+            AdStrategy.CLOSE_AND_BACK -> {
+                mainHandler.postDelayed({
+                    executeCloseAndBackStep(watchedPackage)
+                }, INITIAL_SCAN_DELAY_MS)
+            }
+            AdStrategy.AUTO -> {
+                // Full cascading sequence.
+                mainHandler.postDelayed({
+                    executeAutoDismissStep(watchedPackage)
+                }, INITIAL_SCAN_DELAY_MS)
+            }
+        }
     }
 
-    /**
-     * Executes the current dismiss step and schedules the next one if needed.
-     * Each step is progressively more aggressive.
-     */
-    private fun executeDismissStep(watchedPackage: String) {
+    // -----------------------------------------------------------------------
+    // Strategy: AUTO — full cascading dismiss
+    // -----------------------------------------------------------------------
+
+    private fun executeAutoDismissStep(watchedPackage: String) {
         if (!isHandlingAd) return
 
         dismissAttempt++
-        Log.i(TAG, "Dismiss attempt #$dismissAttempt for ad in $watchedPackage")
+        Log.i(TAG, "Auto dismiss attempt #$dismissAttempt for ad in $watchedPackage")
 
         when (dismissAttempt) {
-            // Step 1: Scan tree for close/skip buttons.
             1 -> {
                 val clicked = scanAndClickCloseButton()
                 if (clicked) {
-                    Log.i(TAG, "Step 1: Found and clicked close button")
-                    scheduleVerification(watchedPackage)
+                    Log.i(TAG, "Auto step 1: Found and clicked close button")
+                    scheduleAutoVerification(watchedPackage)
                 } else {
-                    // Try next step immediately.
-                    mainHandler.postDelayed({ executeDismissStep(watchedPackage) }, STEP_DELAY_MS)
+                    mainHandler.postDelayed({ executeAutoDismissStep(watchedPackage) }, STEP_DELAY_MS)
                 }
             }
-            // Step 2: Try gesture taps on common close-button locations.
             2 -> {
                 val tapped = tryGestureTapClosePositions()
-                if (tapped) {
-                    Log.i(TAG, "Step 2: Gesture-tapped close position")
-                }
-                // Always proceed to verify / next step.
-                scheduleVerification(watchedPackage)
+                if (tapped) Log.i(TAG, "Auto step 2: Gesture-tapped close position")
+                scheduleAutoVerification(watchedPackage)
             }
-            // Step 3: Hit BACK button.
             3 -> {
-                Log.i(TAG, "Step 3: BACK action")
+                Log.i(TAG, "Auto step 3: BACK action")
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                scheduleVerification(watchedPackage)
+                scheduleAutoVerification(watchedPackage)
             }
-            // Step 4: Hit BACK again (some ads need two).
             4 -> {
-                Log.i(TAG, "Step 4: Second BACK action")
+                Log.i(TAG, "Auto step 4: Second BACK action")
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                scheduleVerification(watchedPackage)
+                scheduleAutoVerification(watchedPackage)
             }
-            // Step 5: Scan tree one more time (close button may have appeared after a timer).
             5 -> {
                 val clicked = scanAndClickCloseButton()
-                Log.i(TAG, "Step 5: Re-scan tree, found=$clicked")
+                Log.i(TAG, "Auto step 5: Re-scan tree, found=$clicked")
                 if (!clicked) {
-                    mainHandler.postDelayed({ executeDismissStep(watchedPackage) }, STEP_DELAY_MS)
+                    mainHandler.postDelayed({ executeAutoDismissStep(watchedPackage) }, STEP_DELAY_MS)
                 } else {
-                    scheduleVerification(watchedPackage)
+                    scheduleAutoVerification(watchedPackage)
                 }
             }
-            // Step 6: Kill the ad process and relaunch the game.
             6 -> {
-                Log.i(TAG, "Step 6: Kill + relaunch")
+                Log.i(TAG, "Auto step 6: Kill + relaunch")
                 killAndRelaunch(watchedPackage)
             }
-            // Step 7: Final fallback — go HOME.
             else -> {
-                Log.i(TAG, "Step 7: HOME fallback")
+                Log.i(TAG, "Auto step 7: HOME fallback")
                 performGlobalAction(GLOBAL_ACTION_HOME)
                 mainHandler.postDelayed({
                     relaunchApp(watchedPackage)
@@ -256,13 +269,102 @@ class AdDetectorService : AccessibilityService() {
         }
     }
 
+    private fun scheduleAutoVerification(watchedPackage: String) {
+        mainHandler.postDelayed({
+            if (!isHandlingAd) return@postDelayed
+            executeAutoDismissStep(watchedPackage)
+        }, VERIFY_DELAY_MS)
+    }
+
+    // -----------------------------------------------------------------------
+    // Strategy: CLOSE_AND_BACK
+    // -----------------------------------------------------------------------
+
+    private fun executeCloseAndBackStep(watchedPackage: String) {
+        if (!isHandlingAd) return
+
+        dismissAttempt++
+        Log.i(TAG, "CloseAndBack step #$dismissAttempt for $watchedPackage")
+
+        when (dismissAttempt) {
+            1 -> {
+                val clicked = scanAndClickCloseButton()
+                if (clicked) {
+                    Log.i(TAG, "CloseAndBack: Found close button")
+                    scheduleCloseAndBackVerification(watchedPackage)
+                } else {
+                    mainHandler.postDelayed({ executeCloseAndBackStep(watchedPackage) }, STEP_DELAY_MS)
+                }
+            }
+            2 -> {
+                val tapped = tryGestureTapClosePositions()
+                if (tapped) Log.i(TAG, "CloseAndBack: Gesture-tapped close position")
+                scheduleCloseAndBackVerification(watchedPackage)
+            }
+            3 -> {
+                Log.i(TAG, "CloseAndBack: BACK action")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                scheduleCloseAndBackVerification(watchedPackage)
+            }
+            4 -> {
+                Log.i(TAG, "CloseAndBack: Second BACK action")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                scheduleCloseAndBackVerification(watchedPackage)
+            }
+            5 -> {
+                val clicked = scanAndClickCloseButton()
+                Log.i(TAG, "CloseAndBack: Re-scan, found=$clicked")
+                if (!clicked) {
+                    // Give up — don't kill the app.
+                    Log.i(TAG, "CloseAndBack: Exhausted — giving up")
+                    resetHandlingState()
+                } else {
+                    scheduleCloseAndBackVerification(watchedPackage)
+                }
+            }
+            else -> {
+                Log.i(TAG, "CloseAndBack: Exhausted")
+                resetHandlingState()
+            }
+        }
+    }
+
+    private fun scheduleCloseAndBackVerification(watchedPackage: String) {
+        mainHandler.postDelayed({
+            if (!isHandlingAd) return@postDelayed
+            executeCloseAndBackStep(watchedPackage)
+        }, VERIFY_DELAY_MS)
+    }
+
+    // -----------------------------------------------------------------------
+    // Strategy: BACK_ONLY
+    // -----------------------------------------------------------------------
+
+    private fun executeBackOnlyStep(watchedPackage: String) {
+        if (!isHandlingAd) return
+
+        dismissAttempt++
+        Log.i(TAG, "BackOnly step #$dismissAttempt for $watchedPackage")
+
+        if (dismissAttempt <= 3) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            mainHandler.postDelayed({
+                if (!isHandlingAd) return@postDelayed
+                executeBackOnlyStep(watchedPackage)
+            }, VERIFY_DELAY_MS)
+        } else {
+            Log.i(TAG, "BackOnly: Exhausted")
+            resetHandlingState()
+        }
+    }
+
     /** Schedule a verification check — if the ad is still showing, proceed to next step. */
     private fun scheduleVerification(watchedPackage: String) {
         mainHandler.postDelayed({
             if (!isHandlingAd) return@postDelayed
             // If the user has gone back to the watched app, we're done.
             // Otherwise try the next step.
-            executeDismissStep(watchedPackage)
+            executeAutoDismissStep(watchedPackage)
         }, VERIFY_DELAY_MS)
     }
 
@@ -612,6 +714,7 @@ class AdDetectorService : AccessibilityService() {
         private const val KILL_DELAY_MS = 500L
         private const val RELAUNCH_DELAY_MS = 600L
         private const val COOLDOWN_MS = 4_000L
+        private const val INSTANT_KILL_DELAY_MS = 150L
 
         // Close-button detection thresholds.
         private const val MIN_CLOSE_BUTTON_PX = 20

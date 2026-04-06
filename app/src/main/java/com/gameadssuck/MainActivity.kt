@@ -69,11 +69,17 @@ class MainActivity : AppCompatActivity() {
     // -----------------------------------------------------------------------
 
     private fun setupRecyclerView() {
-        adapter = WatchedAppsAdapter { packageName ->
-            watchedAppsManager.removeWatchedPackage(packageName)
-            refreshWatchedApps()
-            Snackbar.make(binding.root, getString(R.string.app_removed, packageName), Snackbar.LENGTH_SHORT).show()
-        }
+        adapter = WatchedAppsAdapter(
+            onRemove = { packageName ->
+                watchedAppsManager.removeWatchedPackage(packageName)
+                refreshWatchedApps()
+                Snackbar.make(binding.root, getString(R.string.app_removed, packageName), Snackbar.LENGTH_SHORT).show()
+            },
+            onStrategyChanged = { packageName, strategy ->
+                watchedAppsManager.setStrategy(packageName, strategy)
+                refreshWatchedApps()
+            }
+        )
         binding.rvWatchedApps.layoutManager = LinearLayoutManager(this)
         binding.rvWatchedApps.addItemDecoration(
             DividerItemDecoration(this, DividerItemDecoration.VERTICAL)
@@ -115,10 +121,12 @@ class MainActivity : AppCompatActivity() {
     // -----------------------------------------------------------------------
 
     private fun refreshWatchedApps() {
-        val packages = watchedAppsManager.getWatchedPackages().toList().sorted()
-        adapter.submitList(packages)
-        binding.tvEmpty.visibility = if (packages.isEmpty()) View.VISIBLE else View.GONE
-        binding.rvWatchedApps.visibility = if (packages.isEmpty()) View.GONE else View.VISIBLE
+        val items = watchedAppsManager.getWatchedPackages()
+            .sorted()
+            .map { WatchedAppItem(it, watchedAppsManager.getStrategy(it)) }
+        adapter.submitList(items)
+        binding.tvEmpty.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
+        binding.rvWatchedApps.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
     }
 
     private fun updateServiceStatusBanner() {
