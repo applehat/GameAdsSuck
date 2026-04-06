@@ -150,6 +150,8 @@ class AdDetectorService : AccessibilityService() {
     // -----------------------------------------------------------------------
 
     private fun startForegroundNotification() {
+        if (!hasNotificationPermission()) return
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 getString(R.string.notification_channel_id),
@@ -180,6 +182,8 @@ class AdDetectorService : AccessibilityService() {
     }
 
     private fun showAdDetectedNotification(packageName: String) {
+        if (!hasNotificationPermission()) return
+
         val appName = try {
             val info = packageManager.getApplicationInfo(packageName, 0)
             packageManager.getApplicationLabel(info).toString()

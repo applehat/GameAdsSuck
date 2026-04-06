@@ -1,10 +1,13 @@
 package com.gameadssuck
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
 import android.view.View
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DividerItemDecoration
@@ -26,6 +29,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var watchedAppsManager: WatchedAppsManager
     private lateinit var adapter: WatchedAppsAdapter
 
+    /** Launcher for the POST_NOTIFICATIONS runtime permission request. */
+    private val requestNotificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            updateNotificationStatusBanner()
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -37,12 +46,14 @@ class MainActivity : AppCompatActivity() {
         setupRecyclerView()
         setupFab()
         setupStatusBanner()
+        requestNotificationsPermissionIfNeeded()
     }
 
     override fun onResume() {
         super.onResume()
         refreshWatchedApps()
         updateServiceStatusBanner()
+        updateNotificationStatusBanner()
     }
 
     // -----------------------------------------------------------------------
@@ -73,6 +84,18 @@ class MainActivity : AppCompatActivity() {
             // Open the system Accessibility Settings so the user can enable the service.
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+        binding.tvNotificationStatus.setOnClickListener {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    /** Requests POST_NOTIFICATIONS permission on Android 13+ if not yet granted. */
+    private fun requestNotificationsPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission()) {
+            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -97,6 +120,14 @@ class MainActivity : AppCompatActivity() {
             binding.tvServiceStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_disabled_bg))
             binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_disabled_text))
         }
+    }
+
+    private fun updateNotificationStatusBanner() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            binding.tvNotificationStatus.visibility = View.GONE
+            return
+        }
+        binding.tvNotificationStatus.visibility = if (hasNotificationPermission()) View.GONE else View.VISIBLE
     }
 
     /** Returns true when the AdDetectorService is currently enabled in system settings. */
