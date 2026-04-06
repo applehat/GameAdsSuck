@@ -312,9 +312,7 @@ class AdDetectorService : AccessibilityService() {
         )
 
         private val DISMISS_CONTROL_MARKERS = listOf(
-            "close ad",
             "close",
-            "skip ad",
             "skip",
             "dismiss",
             "no thanks",
