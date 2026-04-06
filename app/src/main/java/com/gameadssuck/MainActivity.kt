@@ -9,6 +9,7 @@ import android.provider.Settings
 import android.text.TextUtils
 import android.view.View
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DividerItemDecoration
@@ -20,7 +21,7 @@ import com.google.android.material.snackbar.Snackbar
  * Main screen of the app.
  *
  * Displays:
- *  - A status banner showing whether the Accessibility Service is enabled.
+ *  - Status banners for Accessibility Service, Restricted Settings, and Notifications.
  *  - The list of apps currently being watched for ads.
  *  - A FAB to open the app picker and add a new watched app.
  */
@@ -39,7 +40,7 @@ class MainActivity : AppCompatActivity() {
                 getPreferences(MODE_PRIVATE).getBoolean(PREF_NOTIFICATION_ASKED, false)
             ) {
                 // Permanently denied — take the user to app settings so they can enable it.
-                openNotificationSettings()
+                openAppDetailsSettings()
             }
             updateNotificationStatusBanner()
         }
@@ -54,14 +55,14 @@ class MainActivity : AppCompatActivity() {
 
         setupRecyclerView()
         setupFab()
-        setupStatusBanner()
-        requestNotificationsPermissionIfNeeded()
+        setupStatusBanners()
     }
 
     override fun onResume() {
         super.onResume()
         refreshWatchedApps()
         updateServiceStatusBanner()
+        updateRestrictedSettingsBanner()
         updateNotificationStatusBanner()
     }
 
@@ -70,11 +71,17 @@ class MainActivity : AppCompatActivity() {
     // -----------------------------------------------------------------------
 
     private fun setupRecyclerView() {
-        adapter = WatchedAppsAdapter { packageName ->
-            watchedAppsManager.removeWatchedPackage(packageName)
-            refreshWatchedApps()
-            Snackbar.make(binding.root, getString(R.string.app_removed, packageName), Snackbar.LENGTH_SHORT).show()
-        }
+        adapter = WatchedAppsAdapter(
+            onRemove = { packageName ->
+                watchedAppsManager.removeWatchedPackage(packageName)
+                refreshWatchedApps()
+                Snackbar.make(binding.root, getString(R.string.app_removed, packageName), Snackbar.LENGTH_SHORT).show()
+            },
+            onStrategyChanged = { packageName, strategy ->
+                watchedAppsManager.setStrategy(packageName, strategy)
+                refreshWatchedApps()
+            }
+        )
         binding.rvWatchedApps.layoutManager = LinearLayoutManager(this)
         binding.rvWatchedApps.addItemDecoration(
             DividerItemDecoration(this, DividerItemDecoration.VERTICAL)
@@ -88,29 +95,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupStatusBanner() {
+    private fun setupStatusBanners() {
+        // Accessibility service banner — tap opens Accessibility Settings.
         binding.tvServiceStatus.setOnClickListener {
-            // Open the system Accessibility Settings so the user can enable the service.
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+
+        // Restricted settings banner — tap shows instructional dialog.
+        binding.tvRestrictedSettings.setOnClickListener {
+            showRestrictedSettingsDialog()
+        }
+
+        // Notification permission banner — tap requests the permission.
         binding.tvNotificationStatus.setOnClickListener {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                getPreferences(MODE_PRIVATE).edit()
+                    .putBoolean(PREF_NOTIFICATION_ASKED, true)
+                    .apply()
                 requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
     }
 
-    /** Requests POST_NOTIFICATIONS permission on Android 13+ if not yet granted. */
-    private fun requestNotificationsPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission()) {
-            getPreferences(MODE_PRIVATE).edit()
-                .putBoolean(PREF_NOTIFICATION_ASKED, true).apply()
-            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+    // -----------------------------------------------------------------------
+    // Permission guidance
+    // -----------------------------------------------------------------------
+
+    /**
+     * Shows a dialog explaining how to enable "Allow restricted settings"
+     * on Android 13+ for sideloaded apps, then opens App Details.
+     */
+    private fun showRestrictedSettingsDialog() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.restricted_settings_title)
+            .setMessage(R.string.restricted_settings_message)
+            .setPositiveButton(R.string.restricted_settings_ok) { _, _ ->
+                openAppDetailsSettings()
+            }
+            .setNegativeButton(R.string.restricted_settings_cancel, null)
+            .show()
     }
 
-    /** Opens the system app-details settings so the user can manually grant permissions. */
-    private fun openNotificationSettings() {
+    /** Opens the system app-details settings so the user can manage permissions. */
+    private fun openAppDetailsSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
             data = Uri.fromParts("package", packageName, null)
         }
@@ -122,10 +149,12 @@ class MainActivity : AppCompatActivity() {
     // -----------------------------------------------------------------------
 
     private fun refreshWatchedApps() {
-        val packages = watchedAppsManager.getWatchedPackages().toList().sorted()
-        adapter.submitList(packages)
-        binding.tvEmpty.visibility = if (packages.isEmpty()) View.VISIBLE else View.GONE
-        binding.rvWatchedApps.visibility = if (packages.isEmpty()) View.GONE else View.VISIBLE
+        val items = watchedAppsManager.getWatchedPackages()
+            .sorted()
+            .map { WatchedAppItem(it, watchedAppsManager.getStrategy(it)) }
+        adapter.submitList(items)
+        binding.tvEmpty.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
+        binding.rvWatchedApps.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
     }
 
     private fun updateServiceStatusBanner() {
@@ -139,6 +168,22 @@ class MainActivity : AppCompatActivity() {
             binding.tvServiceStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_disabled_bg))
             binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_disabled_text))
         }
+    }
+
+    /**
+     * Shows the "Allow restricted settings" banner on Android 13+ when the
+     * accessibility service is not yet enabled. This is necessary for
+     * sideloaded (non-Play-Store) apps.
+     */
+    private fun updateRestrictedSettingsBanner() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            binding.tvRestrictedSettings.visibility = View.GONE
+            return
+        }
+        // Show the banner when the service is disabled — the user may need
+        // restricted settings turned on before they can enable it.
+        val serviceEnabled = isAccessibilityServiceEnabled()
+        binding.tvRestrictedSettings.visibility = if (serviceEnabled) View.GONE else View.VISIBLE
     }
 
     private fun updateNotificationStatusBanner() {

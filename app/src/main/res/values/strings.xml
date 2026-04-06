@@ -2,17 +2,24 @@
     <string name="app_name">GameAdsSuck</string>
     <string name="title_app_picker">Add App to Watch</string>
     <string name="accessibility_service_label">GameAdsSuck Ad Detector</string>
-    <string name="accessibility_service_description">Monitors foreground windows to detect advertisement interstitials in watched apps, then kills and relaunches the app to bypass the ad.</string>
+    <string name="accessibility_service_description">Monitors watched apps for ad overlays and aggressively dismisses them. Scans window content for close/skip buttons, taps common close positions, presses Back, and can force-restart the game as a last resort.</string>
 
     <!-- Main screen -->
     <string name="header_watched_apps">Watched Apps</string>
-    <string name="status_service_enabled">Ad Detector is active</string>
-    <string name="status_service_disabled">Ad Detector is disabled — tap to enable</string>
-    <string name="status_notification_disabled">Notifications are disabled — tap to grant permission</string>
+    <string name="status_service_enabled">✅ Ad Detector is active</string>
+    <string name="status_service_disabled">⚠️ Ad Detector is disabled — tap to enable</string>
+    <string name="status_notification_disabled">🔔 Notifications are disabled — tap to grant permission</string>
+    <string name="status_restricted_settings">🔒 Restricted settings must be allowed — tap for instructions</string>
     <string name="empty_watched_apps">No apps being watched.\nTap + to add a game.</string>
     <string name="btn_add_app">Add app</string>
     <string name="btn_remove_app">Remove</string>
     <string name="menu_settings">Settings</string>
+
+    <!-- Permission guidance -->
+    <string name="restricted_settings_title">Allow Restricted Settings</string>
+    <string name="restricted_settings_message">On Android 13+, sideloaded apps need \"Allow restricted settings\" to use accessibility.\n\n1. Open Settings → Apps → GameAdsSuck\n2. Tap the ⋮ menu (top-right)\n3. Select \"Allow restricted settings\"\n4. Return here and enable the Ad Detector\n\nTap OK to open App Settings now.</string>
+    <string name="restricted_settings_ok">Open App Settings</string>
+    <string name="restricted_settings_cancel">Cancel</string>
 
     <!-- App picker -->
     <string name="hint_search_apps">Search apps…</string>
@@ -27,11 +34,37 @@
     <string name="confirm_remove_yes">Remove</string>
     <string name="confirm_remove_no">Cancel</string>
 
+    <!-- Per-app ad strategies -->
+    <string name="strategy_auto">Auto (all tricks)</string>
+    <string name="strategy_auto_desc">Full cascade: find close button → gesture taps → BACK → re-scan → kill &amp; relaunch → HOME</string>
+    <string name="strategy_instant_kill">Instant Kill &amp; Restart</string>
+    <string name="strategy_instant_kill_desc">Immediately kills the game and relaunches it — fastest way past an ad</string>
+    <string name="strategy_close_and_back">Close Button + Back</string>
+    <string name="strategy_close_and_back_desc">Tries to find a close/skip button, then presses Back. Never kills the app.</string>
+    <string name="strategy_back_only">Back Only</string>
+    <string name="strategy_back_only_desc">Just presses Back to dismiss the ad. Simplest but may not work on all ad networks.</string>
+    <string name="strategy_dialog_title">Ad dismiss strategy</string>
+
     <!-- Notifications -->
     <string name="notification_channel_id">ad_detector</string>
     <string name="notification_channel_name">Ad Detector</string>
+    <string name="notification_channel_events_id">ad_events</string>
+    <string name="notification_channel_events_name">Ad Events</string>
     <string name="notification_title">GameAdsSuck is watching</string>
     <string name="notification_text">Monitoring %d app(s) for ads</string>
-    <string name="notification_ad_detected_title">Ad detected!</string>
-    <string name="notification_ad_detected_text">Killed and restarting %s</string>
+    <string name="notification_watching_app">Watching %s for ads</string>
+    <string name="notification_ad_detected_title">⚡ Ad detected!</string>
+    <string name="notification_ad_detected_text">Dismissing ad in %1$s using %2$s</string>
+    <string name="notification_ad_dismissed_title">✅ Ad dismissed</string>
+    <string name="notification_ad_dismissed_text">Successfully bypassed ad in %s</string>
+
+    <!-- Toast messages for service actions -->
+    <string name="toast_ad_detected">🎯 Ad detected in %1$s — using %2$s</string>
+    <string name="toast_trying_close_button">🔍 Scanning for close button…</string>
+    <string name="toast_trying_gesture_tap">👆 Tapping close positions…</string>
+    <string name="toast_trying_back">⬅️ Pressing Back…</string>
+    <string name="toast_trying_kill_relaunch">💀 Killing &amp; relaunching %s…</string>
+    <string name="toast_trying_home_relaunch">🏠 Going Home &amp; relaunching…</string>
+    <string name="toast_ad_dismissed">✅ Ad dismissed in %s</string>
+    <string name="toast_service_started">🛡️ GameAdsSuck is active — watching %d app(s)</string>
 </resources>

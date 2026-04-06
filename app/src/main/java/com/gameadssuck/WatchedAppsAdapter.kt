@@ -10,12 +10,22 @@ import androidx.recyclerview.widget.RecyclerView
 import com.gameadssuck.databinding.ItemWatchedAppBinding
 
 /**
+ * Data class pairing a watched package name with its per-app ad strategy.
+ */
+data class WatchedAppItem(
+    val packageName: String,
+    val strategy: AdStrategy
+)
+
+/**
  * RecyclerView adapter that displays the list of apps currently being watched for ads.
- * Each item shows the app icon, name, package name, and a button to stop watching it.
+ * Each item shows the app icon, name, package name, the current ad-dismiss strategy,
+ * and a button to stop watching it.
  */
 class WatchedAppsAdapter(
-    private val onRemove: (packageName: String) -> Unit
-) : ListAdapter<String, WatchedAppsAdapter.ViewHolder>(DIFF_CALLBACK) {
+    private val onRemove: (packageName: String) -> Unit,
+    private val onStrategyChanged: (packageName: String, strategy: AdStrategy) -> Unit
+) : ListAdapter<WatchedAppItem, WatchedAppsAdapter.ViewHolder>(DIFF_CALLBACK) {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val binding = ItemWatchedAppBinding.inflate(
@@ -32,42 +42,75 @@ class WatchedAppsAdapter(
         private val binding: ItemWatchedAppBinding
     ) : RecyclerView.ViewHolder(binding.root) {
 
-        fun bind(packageName: String) {
-            val pm = binding.root.context.packageManager
+        fun bind(item: WatchedAppItem) {
+            val ctx = binding.root.context
+            val pm = ctx.packageManager
 
             // Resolve app label and icon, falling back gracefully if the package is gone.
             try {
-                val info = pm.getApplicationInfo(packageName, 0)
+                val info = pm.getApplicationInfo(item.packageName, 0)
                 binding.tvAppName.text = pm.getApplicationLabel(info)
                 binding.ivAppIcon.setImageDrawable(pm.getApplicationIcon(info))
             } catch (e: PackageManager.NameNotFoundException) {
-                binding.tvAppName.text = packageName
+                binding.tvAppName.text = item.packageName
                 binding.ivAppIcon.setImageDrawable(null)
             }
-            binding.tvPackageName.text = packageName
+            binding.tvPackageName.text = item.packageName
+
+            // Show current strategy label — tapping it opens the strategy picker.
+            binding.tvStrategy.text = ctx.getString(item.strategy.labelResId)
+            binding.tvStrategy.setOnClickListener {
+                showStrategyDialog(item)
+            }
 
             binding.btnRemove.setOnClickListener {
-                AlertDialog.Builder(binding.root.context)
+                AlertDialog.Builder(ctx)
                     .setTitle(R.string.confirm_remove_title)
                     .setMessage(
-                        binding.root.context.getString(
+                        ctx.getString(
                             R.string.confirm_remove_message,
                             binding.tvAppName.text
                         )
                     )
                     .setPositiveButton(R.string.confirm_remove_yes) { _, _ ->
-                        onRemove(packageName)
+                        onRemove(item.packageName)
                     }
                     .setNegativeButton(R.string.confirm_remove_no, null)
                     .show()
             }
         }
+
+        private fun showStrategyDialog(item: WatchedAppItem) {
+            val ctx = binding.root.context
+            val strategies = AdStrategy.entries
+            val labels = strategies.map { strategy ->
+                val label = ctx.getString(strategy.labelResId)
+                val desc = ctx.getString(strategy.descResId)
+                "$label\n$desc"
+            }.toTypedArray()
+
+            val currentIndex = strategies.indexOf(item.strategy)
+
+            AlertDialog.Builder(ctx)
+                .setTitle(R.string.strategy_dialog_title)
+                .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
+                    val selected = strategies[which]
+                    if (selected != item.strategy) {
+                        onStrategyChanged(item.packageName, selected)
+                    }
+                    dialog.dismiss()
+                }
+                .setNegativeButton(R.string.confirm_remove_no, null)
+                .show()
+        }
     }
 
     companion object {
-        private val DIFF_CALLBACK = object : DiffUtil.ItemCallback<String>() {
-            override fun areItemsTheSame(oldItem: String, newItem: String) = oldItem == newItem
-            override fun areContentsTheSame(oldItem: String, newItem: String) = oldItem == newItem
+        private val DIFF_CALLBACK = object : DiffUtil.ItemCallback<WatchedAppItem>() {
+            override fun areItemsTheSame(oldItem: WatchedAppItem, newItem: WatchedAppItem) =
+                oldItem.packageName == newItem.packageName
+            override fun areContentsTheSame(oldItem: WatchedAppItem, newItem: WatchedAppItem) =
+                oldItem == newItem
         }
     }
 }
