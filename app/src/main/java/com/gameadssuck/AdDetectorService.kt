@@ -65,6 +65,7 @@ class AdDetectorService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         runCatching {
+            if (!::watchedAppsManager.isInitialized) return
             if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
             if (isHandlingAd) return
 
@@ -146,7 +147,7 @@ class AdDetectorService : AccessibilityService() {
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         val watched = watchedAppsManager.getWatchedPackages().size
