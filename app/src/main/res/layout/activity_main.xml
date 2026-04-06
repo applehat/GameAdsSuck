@@ -41,6 +41,21 @@
             android:background="@color/status_disabled_bg"
             android:textStyle="bold" />
 
+        <!-- Notification permission status banner (Android 13+) -->
+        <TextView
+            android:id="@+id/tvNotificationStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:padding="12dp"
+            android:text="@string/status_notification_disabled"
+            android:textColor="@color/status_disabled_text"
+            android:background="@color/status_disabled_bg"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
         <!-- Section header -->
         <TextView
             android:layout_width="match_parent"

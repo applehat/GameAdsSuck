@@ -44,6 +44,7 @@ class AdDetectorService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         watchedAppsManager = WatchedAppsManager(this)
+        ensureNotificationChannel()
         startForegroundNotification()
     }
 
@@ -150,14 +151,7 @@ class AdDetectorService : AccessibilityService() {
     // -----------------------------------------------------------------------
 
     private fun startForegroundNotification() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                getString(R.string.notification_channel_id),
-                getString(R.string.notification_channel_name),
-                NotificationManager.IMPORTANCE_LOW
-            )
-            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
-        }
+        if (!hasNotificationPermission()) return
 
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
@@ -180,6 +174,8 @@ class AdDetectorService : AccessibilityService() {
     }
 
     private fun showAdDetectedNotification(packageName: String) {
+        if (!hasNotificationPermission()) return
+
         val appName = try {
             val info = packageManager.getApplicationInfo(packageName, 0)
             packageManager.getApplicationLabel(info).toString()
@@ -194,6 +190,18 @@ class AdDetectorService : AccessibilityService() {
         )
         getSystemService(NotificationManager::class.java)
             ?.notify(NOTIFICATION_ID_AD_DETECTED, notification)
+    }
+
+    /** Creates the notification channel on Android 8+. Safe to call multiple times. */
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                getString(R.string.notification_channel_id),
+                getString(R.string.notification_channel_name),
+                NotificationManager.IMPORTANCE_LOW
+            )
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+        }
     }
 
     private fun buildNotification(

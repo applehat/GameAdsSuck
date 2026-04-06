@@ -8,6 +8,7 @@
     <string name="header_watched_apps">Watched Apps</string>
     <string name="status_service_enabled">Ad Detector is active</string>
     <string name="status_service_disabled">Ad Detector is disabled — tap to enable</string>
+    <string name="status_notification_disabled">Notifications are disabled — tap to grant permission</string>
     <string name="empty_watched_apps">No apps being watched.\nTap + to add a game.</string>
     <string name="btn_add_app">Add app</string>
     <string name="btn_remove_app">Remove</string>
