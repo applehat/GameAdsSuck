@@ -142,16 +142,15 @@ class AdDetectorService : AccessibilityService() {
 
     private fun tryAutoDismissAd(): Boolean {
         val rootNode = rootInActiveWindow ?: return false
-        val dismissNode = try {
-            findDismissControl(rootNode)
+        return try {
+            val dismissNode = findDismissControl(rootNode) ?: return false
+            try {
+                dismissNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            } finally {
+                dismissNode.recycle()
+            }
         } finally {
             rootNode.recycle()
-        } ?: return false
-
-        return try {
-            dismissNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        } finally {
-            dismissNode.recycle()
         }
     }
 
