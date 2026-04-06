@@ -110,6 +110,7 @@ class AppPickerActivity : AppCompatActivity() {
             // Only update the UI if the Activity is still alive.
             if (!isDestroyed && !isFinishing) {
                 runOnUiThread {
+                    if (isDestroyed || isFinishing) return@runOnUiThread
                     binding.progressBar.visibility = View.GONE
                     binding.rvApps.visibility = View.VISIBLE
                     adapter.submitAllApps(apps)
