@@ -2,6 +2,7 @@ package com.gameadssuck
 
 import android.accessibilityservice.AccessibilityService
 import android.app.ActivityManager
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -200,7 +201,7 @@ class AdDetectorService : AccessibilityService() {
         text: String,
         pendingIntent: PendingIntent?,
         ongoing: Boolean = false
-    ): android.app.Notification {
+    ): Notification {
         val builder = NotificationCompat.Builder(this, getString(R.string.notification_channel_id))
             .setContentTitle(title)
             .setContentText(text)
