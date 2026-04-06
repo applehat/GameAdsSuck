@@ -6,6 +6,7 @@ import android.provider.Settings
 import android.text.TextUtils
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DividerItemDecoration
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.gameadssuck.databinding.ActivityMainBinding
@@ -89,12 +90,12 @@ class MainActivity : AppCompatActivity() {
         val enabled = isAccessibilityServiceEnabled()
         if (enabled) {
             binding.tvServiceStatus.setText(R.string.status_service_enabled)
-            binding.tvServiceStatus.setBackgroundColor(getColor(R.color.status_enabled_bg))
-            binding.tvServiceStatus.setTextColor(getColor(R.color.status_enabled_text))
+            binding.tvServiceStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_enabled_bg))
+            binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_enabled_text))
         } else {
             binding.tvServiceStatus.setText(R.string.status_service_disabled)
-            binding.tvServiceStatus.setBackgroundColor(getColor(R.color.status_disabled_bg))
-            binding.tvServiceStatus.setTextColor(getColor(R.color.status_disabled_text))
+            binding.tvServiceStatus.setBackgroundColor(ContextCompat.getColor(this, R.color.status_disabled_bg))
+            binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_disabled_text))
         }
     }
 

@@ -1,6 +1,6 @@
 package com.gameadssuck
 
-import android.content.pm.ApplicationInfo
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.appcompat.widget.SearchView
@@ -91,12 +91,14 @@ class AppPickerActivity : AppCompatActivity() {
     private fun loadApps() {
         thread {
             val pm = packageManager
-            val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-                .filter { info ->
-                    // Only show apps that have a launcher icon (i.e. user-facing apps).
-                    pm.getLaunchIntentForPackage(info.packageName) != null &&
-                        info.packageName != packageName
-                }
+            // Query apps with a launcher activity instead of all installed applications.
+            // This avoids the broad QUERY_ALL_PACKAGES permission while still covering every
+            // user-launchable app (games included).
+            val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val apps = pm.queryIntentActivities(launcherIntent, PackageManager.GET_META_DATA)
+                .map { it.activityInfo.applicationInfo }
+                .distinctBy { it.packageName }
+                .filter { it.packageName != packageName }
                 .map { info ->
                     AppInfo(
                         packageName = info.packageName,
