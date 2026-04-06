@@ -2,7 +2,7 @@
 
 [![Build](https://github.com/applehat/GameAdsSuck/actions/workflows/build.yml/badge.svg)](https://github.com/applehat/GameAdsSuck/actions/workflows/build.yml)
 
-An Android app that watches your mobile games and automatically kills and relaunches them the moment an advertisement interstitial appears — so you never have to sit through an intrusive ad again.
+An Android app that watches your mobile games and tries to dismiss advertisement overlays using accessibility actions that still work on modern Android.
 
 ---
 
@@ -10,12 +10,12 @@ An Android app that watches your mobile games and automatically kills and relaun
 
 1. **Add games to the watch list** — open GameAdsSuck, tap **+**, and pick the games you want to protect.
 2. **Enable the Accessibility Service** — tap the red status banner and turn on *GameAdsSuck Ad Detector* in your device's Accessibility Settings.
-3. **Play your games** — GameAdsSuck runs silently in the background. When it detects an ad interstitial (by recognising known ad-SDK packages or activity class names), it:
-   - Navigates to the home screen.
-   - Terminates the game process.
-   - Immediately relaunches the game.
+3. **Play your games** — GameAdsSuck runs in the background. When it detects an ad interstitial, it tries to:
+   - Click visible **close** / **skip** controls inside the ad UI.
+   - Fall back to the Android **Back** action when no dismiss control is available.
+   - Use **Home** only as a last resort.
 
-The ad never gets a chance to play.
+This keeps the app aligned with what Android 14/15 still allows third-party accessibility tools to do.
 
 ---
 
@@ -24,11 +24,12 @@ The ad never gets a chance to play.
 | Feature | Details |
 |---|---|
 | App watch list | Add / remove any installed app |
-| Ad SDK detection | Recognises 17+ ad networks (Unity Ads, AdMob, AppLovin, Vungle, IronSource, …) |
-| Class-name heuristics | Also catches ads shown inside the game's own process |
+| Ad SDK detection | Recognises common ad SDK package prefixes and ad activity names |
+| In-app dismissal | Tries to click close / skip / dismiss controls in the active window |
+| Back fallback | Uses Android Back when no actionable dismiss control is found |
 | Cooldown | 5-second minimum between actions to avoid rapid loops |
 | Status banner | One-tap access to Accessibility Settings |
-| Notifications | Persistent "watching" notification; per-event "ad detected" flash |
+| Notifications | Optional status + ad-detected notifications |
 
 ---
 
@@ -36,9 +37,8 @@ The ad never gets a chance to play.
 
 | Permission | Why |
 |---|---|
-| `KILL_BACKGROUND_PROCESSES` | Terminate the game after it moves to the background |
-| `QUERY_ALL_PACKAGES` | List installed apps in the picker |
-| `FOREGROUND_SERVICE` | Keep the detector running reliably |
+| `POST_NOTIFICATIONS` | Show optional status and ad-detected notifications on Android 13+ |
+| Package visibility `<queries>` | List launcher apps in the picker without broad package access |
 | Accessibility Service | Observe window state changes to detect ad interstitials |
 
 ---
@@ -60,7 +60,7 @@ To install:
 | **Build** | Every push and pull request | Debug APK uploaded as a build artifact (14-day retention) |
 | **Release** | GitHub Release published | Release APK attached to the release as a downloadable asset |
 
-The release APK is signed with the debug signing key so it can be sideloaded on any Android device.
+The debug build uploaded by CI is the easiest way to try a PR before merge: open the PR's **Build** workflow run and download the `GameAdsSuck-debug` artifact.
 
 ---
 
@@ -85,7 +85,7 @@ The generated APK will be at `app/build/outputs/apk/debug/app-debug.apk`.
 ```
 app/src/main/
 ├── java/com/gameadssuck/
-│   ├── AdDetectorService.kt    # AccessibilityService — detects ads, kills & relaunches
+│   ├── AdDetectorService.kt    # AccessibilityService — detects ads and tries to dismiss them
 │   ├── AppPickerActivity.kt    # Searchable list of installed apps
 │   ├── AppPickerAdapter.kt     # RecyclerView adapter for app picker
 │   ├── MainActivity.kt         # Home screen — watch list + service status
@@ -102,7 +102,6 @@ app/src/main/
 
 ## Limitations
 
-* **No root required**, but the app can only *terminate background processes*. It first sends the game to the background (HOME action) before terminating it, so the sequence is: home → terminate → relaunch.
-* Game progress that is not cloud-saved will be lost when the process is terminated — this is a deliberate trade-off to skip the ad.
-* Ad detection relies on known SDK package names and activity class-name heuristics. New or obscure ad SDKs may not be detected until their identifiers are added to `AdDetectorService.AD_SDK_PACKAGES` / `AD_ACTIVITY_KEYWORDS`.
-
+* **No root required**. The app only uses accessibility actions that normal apps can still perform on Android 14/15.
+* Some ads deliberately hide or delay their dismiss buttons. In those cases the app falls back to Back, which may not work for every game or every ad SDK.
+* Ad detection still relies on heuristics plus visible UI structure. New or obscure ad SDKs may not be detected until their identifiers are added to `AdDetectorService`.

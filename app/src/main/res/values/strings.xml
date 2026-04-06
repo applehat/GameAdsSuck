@@ -2,7 +2,7 @@
     <string name="app_name">GameAdsSuck</string>
     <string name="title_app_picker">Add App to Watch</string>
     <string name="accessibility_service_label">GameAdsSuck Ad Detector</string>
-    <string name="accessibility_service_description">Monitors foreground windows to detect advertisement interstitials in watched apps, then kills and relaunches the app to bypass the ad.</string>
+    <string name="accessibility_service_description">Monitors watched apps for ad overlays and tries to dismiss them with accessibility actions that work on modern Android.</string>
 
     <!-- Main screen -->
     <string name="header_watched_apps">Watched Apps</string>
@@ -33,5 +33,5 @@
     <string name="notification_title">GameAdsSuck is watching</string>
     <string name="notification_text">Monitoring %d app(s) for ads</string>
     <string name="notification_ad_detected_title">Ad detected!</string>
-    <string name="notification_ad_detected_text">Killed and restarting %s</string>
+    <string name="notification_ad_detected_text">Trying to dismiss the ad in %s</string>
 </resources>

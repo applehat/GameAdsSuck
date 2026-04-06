@@ -90,23 +90,22 @@ class AppPickerActivity : AppCompatActivity() {
     /** Loads installed apps on a background thread, then populates the list on the main thread. */
     private fun loadApps() {
         thread {
-            val pm = packageManager
-            // Query apps with a launcher activity instead of all installed applications.
-            // This avoids the broad QUERY_ALL_PACKAGES permission while still covering every
-            // user-launchable app (games included).
-            val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-            val apps = pm.queryIntentActivities(launcherIntent, PackageManager.GET_META_DATA)
-                .map { it.activityInfo.applicationInfo }
-                .distinctBy { it.packageName }
-                .filter { it.packageName != packageName }
-                .map { info ->
-                    AppInfo(
-                        packageName = info.packageName,
-                        appName = pm.getApplicationLabel(info).toString(),
-                        applicationInfo = info
-                    )
-                }
-                .sortedBy { it.appName.lowercase() }
+            val apps = runCatching {
+                val pm = packageManager
+                val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                pm.queryIntentActivities(launcherIntent, PackageManager.GET_META_DATA)
+                    .map { it.activityInfo.applicationInfo }
+                    .distinctBy { it.packageName }
+                    .filter { it.packageName != packageName }
+                    .map { info ->
+                        AppInfo(
+                            packageName = info.packageName,
+                            appName = pm.getApplicationLabel(info).toString(),
+                            applicationInfo = info
+                        )
+                    }
+                    .sortedBy { it.appName.lowercase() }
+            }.getOrDefault(emptyList())
 
             // Only update the UI if the Activity is still alive.
             if (!isDestroyed && !isFinishing) {

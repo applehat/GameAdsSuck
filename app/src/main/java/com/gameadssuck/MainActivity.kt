@@ -55,7 +55,6 @@ class MainActivity : AppCompatActivity() {
         setupRecyclerView()
         setupFab()
         setupStatusBanner()
-        requestNotificationsPermissionIfNeeded()
     }
 
     override fun onResume() {
@@ -95,17 +94,11 @@ class MainActivity : AppCompatActivity() {
         }
         binding.tvNotificationStatus.setOnClickListener {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                getPreferences(MODE_PRIVATE).edit()
+                    .putBoolean(PREF_NOTIFICATION_ASKED, true)
+                    .apply()
                 requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
-        }
-    }
-
-    /** Requests POST_NOTIFICATIONS permission on Android 13+ if not yet granted. */
-    private fun requestNotificationsPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission()) {
-            getPreferences(MODE_PRIVATE).edit()
-                .putBoolean(PREF_NOTIFICATION_ASKED, true).apply()
-            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
