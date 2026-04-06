@@ -161,11 +161,23 @@ class AdDetectorService : AccessibilityService() {
         if (matchesDismissControl(node)) {
             if (node.isClickable) return AccessibilityNodeInfo.obtain(node)
             val parent = node.parent
-            if (parent?.isClickable == true) return AccessibilityNodeInfo.obtain(parent)
+            if (parent?.isClickable == true) {
+                return try {
+                    AccessibilityNodeInfo.obtain(parent)
+                } finally {
+                    parent.recycle()
+                }
+            }
+            parent?.recycle()
         }
 
         for (index in 0 until node.childCount) {
-            val result = findDismissControl(node.getChild(index))
+            val child = node.getChild(index)
+            val result = try {
+                findDismissControl(child)
+            } finally {
+                child?.recycle()
+            }
             if (result != null) return result
         }
 
@@ -186,7 +198,13 @@ class AdDetectorService : AccessibilityService() {
         }
 
         for (index in 0 until node.childCount) {
-            if (containsAdCopy(node.getChild(index))) return true
+            val child = node.getChild(index)
+            val childContainsAdCopy = try {
+                containsAdCopy(child)
+            } finally {
+                child?.recycle()
+            }
+            if (childContainsAdCopy) return true
         }
         return false
     }
@@ -300,9 +318,7 @@ class AdDetectorService : AccessibilityService() {
             "skip",
             "dismiss",
             "no thanks",
-            "cancel",
-            "continue",
-            "done"
+            "not now"
         )
 
         private val AD_COPY_MARKERS = listOf(
