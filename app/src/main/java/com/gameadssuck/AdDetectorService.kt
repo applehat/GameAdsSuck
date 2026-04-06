@@ -16,6 +16,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 
 /**
@@ -33,6 +34,9 @@ import androidx.core.app.NotificationCompat
  *  3. Perform BACK action (repeated).
  *  4. Kill the ad process and relaunch the watched game.
  *  5. HOME as a last resort.
+ *
+ * Every action shows a toast notification so the user has immediate feedback.
+ * A persistent foreground notification shows which watched app is currently active.
  */
 class AdDetectorService : AccessibilityService() {
 
@@ -66,9 +70,11 @@ class AdDetectorService : AccessibilityService() {
         super.onServiceConnected()
         runCatching {
             watchedAppsManager = WatchedAppsManager(this)
-            ensureNotificationChannel()
-            startForegroundNotification()
-            Log.i(TAG, "AdDetectorService connected and ready")
+            ensureNotificationChannels()
+            startForegroundServiceNotification()
+            val watchedCount = watchedAppsManager.getWatchedPackages().size
+            showToast(getString(R.string.toast_service_started, watchedCount))
+            Log.i(TAG, "AdDetectorService connected and ready, watching $watchedCount apps")
         }.onFailure {
             Log.e(TAG, "Failed to initialize accessibility service", it)
         }
@@ -82,6 +88,7 @@ class AdDetectorService : AccessibilityService() {
         super.onDestroy()
         mainHandler.removeCallbacksAndMessages(null)
         notificationManager()?.cancel(NOTIFICATION_ID_SERVICE)
+        notificationManager()?.cancel(NOTIFICATION_ID_AD_DETECTED)
     }
 
     // -----------------------------------------------------------------------
@@ -100,10 +107,14 @@ class AdDetectorService : AccessibilityService() {
             // Update tracking when user is inside a watched app.
             if (watchedAppsManager.isWatched(packageName)) {
                 currentWatchedPackage = packageName
+                updateWatchingNotification(packageName)
                 if (isHandlingAd) {
                     // The watched app came back to the foreground — the ad was dismissed.
+                    val appName = getAppName(packageName)
                     Log.i(TAG, "Watched app $packageName returned to foreground, ad dismissed")
                     lastForegroundWasWatched = true
+                    showToast(getString(R.string.toast_ad_dismissed, appName))
+                    showAdDismissedNotification(packageName)
                     resetHandlingState()
                 }
                 return
@@ -178,14 +189,18 @@ class AdDetectorService : AccessibilityService() {
         lastActionTimeMs = System.currentTimeMillis()
         dismissAttempt = 0
 
-        showAdDetectedNotification(watchedPackage)
-
         val strategy = watchedAppsManager.getStrategy(watchedPackage)
+        val appName = getAppName(watchedPackage)
+        val strategyLabel = getString(strategy.labelResId)
+
         Log.i(TAG, "Using strategy ${strategy.key} for $watchedPackage")
+        showToast(getString(R.string.toast_ad_detected, appName, strategyLabel))
+        showAdDetectedNotification(watchedPackage, strategyLabel)
 
         when (strategy) {
             AdStrategy.INSTANT_KILL -> {
                 // Skip all close-button logic — immediately kill + relaunch.
+                showToast(getString(R.string.toast_trying_kill_relaunch, appName))
                 mainHandler.postDelayed({
                     killAndRelaunch(watchedPackage)
                 }, INSTANT_KILL_DELAY_MS)
@@ -222,6 +237,7 @@ class AdDetectorService : AccessibilityService() {
 
         when (dismissAttempt) {
             1 -> {
+                showToast(getString(R.string.toast_trying_close_button))
                 val clicked = scanAndClickCloseButton()
                 if (clicked) {
                     Log.i(TAG, "Auto step 1: Found and clicked close button")
@@ -231,21 +247,25 @@ class AdDetectorService : AccessibilityService() {
                 }
             }
             2 -> {
+                showToast(getString(R.string.toast_trying_gesture_tap))
                 val tapped = tryGestureTapClosePositions()
                 if (tapped) Log.i(TAG, "Auto step 2: Gesture-tapped close position")
                 scheduleAutoVerification(watchedPackage)
             }
             3 -> {
+                showToast(getString(R.string.toast_trying_back))
                 Log.i(TAG, "Auto step 3: BACK action")
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 scheduleAutoVerification(watchedPackage)
             }
             4 -> {
+                showToast(getString(R.string.toast_trying_back))
                 Log.i(TAG, "Auto step 4: Second BACK action")
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 scheduleAutoVerification(watchedPackage)
             }
             5 -> {
+                showToast(getString(R.string.toast_trying_close_button))
                 val clicked = scanAndClickCloseButton()
                 Log.i(TAG, "Auto step 5: Re-scan tree, found=$clicked")
                 if (!clicked) {
@@ -255,10 +275,13 @@ class AdDetectorService : AccessibilityService() {
                 }
             }
             6 -> {
+                val appName = getAppName(watchedPackage)
+                showToast(getString(R.string.toast_trying_kill_relaunch, appName))
                 Log.i(TAG, "Auto step 6: Kill + relaunch")
                 killAndRelaunch(watchedPackage)
             }
             else -> {
+                showToast(getString(R.string.toast_trying_home_relaunch))
                 Log.i(TAG, "Auto step 7: HOME fallback")
                 performGlobalAction(GLOBAL_ACTION_HOME)
                 mainHandler.postDelayed({
@@ -288,6 +311,7 @@ class AdDetectorService : AccessibilityService() {
 
         when (dismissAttempt) {
             1 -> {
+                showToast(getString(R.string.toast_trying_close_button))
                 val clicked = scanAndClickCloseButton()
                 if (clicked) {
                     Log.i(TAG, "CloseAndBack: Found close button")
@@ -297,16 +321,19 @@ class AdDetectorService : AccessibilityService() {
                 }
             }
             2 -> {
+                showToast(getString(R.string.toast_trying_gesture_tap))
                 val tapped = tryGestureTapClosePositions()
                 if (tapped) Log.i(TAG, "CloseAndBack: Gesture-tapped close position")
                 scheduleCloseAndBackVerification(watchedPackage)
             }
             3 -> {
+                showToast(getString(R.string.toast_trying_back))
                 Log.i(TAG, "CloseAndBack: BACK action")
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 scheduleCloseAndBackVerification(watchedPackage)
             }
             4 -> {
+                showToast(getString(R.string.toast_trying_back))
                 Log.i(TAG, "CloseAndBack: Second BACK action")
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 scheduleCloseAndBackVerification(watchedPackage)
@@ -347,6 +374,7 @@ class AdDetectorService : AccessibilityService() {
         Log.i(TAG, "BackOnly step #$dismissAttempt for $watchedPackage")
 
         if (dismissAttempt <= 3) {
+            showToast(getString(R.string.toast_trying_back))
             performGlobalAction(GLOBAL_ACTION_BACK)
             mainHandler.postDelayed({
                 if (!isHandlingAd) return@postDelayed
@@ -610,9 +638,11 @@ class AdDetectorService : AccessibilityService() {
     // Notifications
     // -----------------------------------------------------------------------
 
-    private fun startForegroundNotification() {
-        if (!hasNotificationPermission()) return
-
+    /**
+     * Starts a proper foreground service notification on Android 8+.
+     * On older versions, just shows a regular ongoing notification.
+     */
+    private fun startForegroundServiceNotification() {
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
@@ -621,53 +651,121 @@ class AdDetectorService : AccessibilityService() {
 
         val watched = watchedAppsManager.getWatchedPackages().size
         val notification = buildNotification(
+            CHANNEL_ID_SERVICE,
             getString(R.string.notification_title),
             getString(R.string.notification_text, watched),
+            pendingIntent,
+            ongoing = true
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // Android 14+ requires foreground service type.
+            runCatching {
+                startForeground(
+                    NOTIFICATION_ID_SERVICE, notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            }.onFailure {
+                // Fallback if startForeground fails.
+                notificationManager()?.notify(NOTIFICATION_ID_SERVICE, notification)
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            runCatching {
+                startForeground(NOTIFICATION_ID_SERVICE, notification)
+            }.onFailure {
+                notificationManager()?.notify(NOTIFICATION_ID_SERVICE, notification)
+            }
+        } else {
+            notificationManager()?.notify(NOTIFICATION_ID_SERVICE, notification)
+        }
+    }
+
+    /**
+     * Updates the persistent notification to show which watched app is currently
+     * in the foreground.
+     */
+    private fun updateWatchingNotification(watchedPackage: String) {
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val appName = getAppName(watchedPackage)
+        val notification = buildNotification(
+            CHANNEL_ID_SERVICE,
+            getString(R.string.notification_title),
+            getString(R.string.notification_watching_app, appName),
             pendingIntent,
             ongoing = true
         )
         notificationManager()?.notify(NOTIFICATION_ID_SERVICE, notification)
     }
 
-    private fun showAdDetectedNotification(packageName: String) {
+    private fun showAdDetectedNotification(watchedPackage: String, strategyLabel: String) {
         if (!hasNotificationPermission()) return
 
-        val appName = runCatching {
-            val info = packageManager.getApplicationInfo(packageName, 0)
-            packageManager.getApplicationLabel(info).toString()
-        }.getOrDefault(packageName)
+        val appName = getAppName(watchedPackage)
 
         val notification = buildNotification(
+            CHANNEL_ID_EVENTS,
             getString(R.string.notification_ad_detected_title),
-            getString(R.string.notification_ad_detected_text, appName),
+            getString(R.string.notification_ad_detected_text, appName, strategyLabel),
             null
         )
         notificationManager()?.notify(NOTIFICATION_ID_AD_DETECTED, notification)
     }
 
-    private fun ensureNotificationChannel() {
+    private fun showAdDismissedNotification(watchedPackage: String) {
+        if (!hasNotificationPermission()) return
+
+        val appName = getAppName(watchedPackage)
+
+        val notification = buildNotification(
+            CHANNEL_ID_EVENTS,
+            getString(R.string.notification_ad_dismissed_title),
+            getString(R.string.notification_ad_dismissed_text, appName),
+            null
+        )
+        notificationManager()?.notify(NOTIFICATION_ID_AD_DETECTED, notification)
+    }
+
+    private fun ensureNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                getString(R.string.notification_channel_id),
+            val serviceChannel = NotificationChannel(
+                CHANNEL_ID_SERVICE,
                 getString(R.string.notification_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             )
-            notificationManager()?.createNotificationChannel(channel)
+            val eventsChannel = NotificationChannel(
+                CHANNEL_ID_EVENTS,
+                getString(R.string.notification_channel_events_name),
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
+            val nm = notificationManager()
+            nm?.createNotificationChannel(serviceChannel)
+            nm?.createNotificationChannel(eventsChannel)
         }
     }
 
     private fun buildNotification(
+        channelId: String,
         title: String,
         text: String,
         pendingIntent: PendingIntent?,
         ongoing: Boolean = false
     ): Notification {
-        val builder = NotificationCompat.Builder(this, getString(R.string.notification_channel_id))
+        val builder = NotificationCompat.Builder(this, channelId)
             .setContentTitle(title)
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_delete)
             .setOngoing(ongoing)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(
+                if (channelId == CHANNEL_ID_EVENTS)
+                    NotificationCompat.PRIORITY_DEFAULT
+                else
+                    NotificationCompat.PRIORITY_LOW
+            )
         if (pendingIntent != null) builder.setContentIntent(pendingIntent)
         return builder.build()
     }
@@ -685,6 +783,23 @@ class AdDetectorService : AccessibilityService() {
 
     private fun notificationManager(): NotificationManager? =
         getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
+
+    /** Shows a toast on the main thread. Safe to call from any thread. */
+    private fun showToast(message: String) {
+        mainHandler.post {
+            runCatching {
+                Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** Resolves a human-readable app name from a package name. */
+    private fun getAppName(packageName: String): String {
+        return runCatching {
+            val info = packageManager.getApplicationInfo(packageName, 0)
+            packageManager.getApplicationLabel(info).toString()
+        }.getOrDefault(packageName)
+    }
 
     @Suppress("DEPRECATION")
     private fun safeRecycle(node: AccessibilityNodeInfo?) {
@@ -717,6 +832,9 @@ class AdDetectorService : AccessibilityService() {
 
         private const val NOTIFICATION_ID_SERVICE = 1001
         private const val NOTIFICATION_ID_AD_DETECTED = 1002
+
+        private const val CHANNEL_ID_SERVICE = "ad_detector"
+        private const val CHANNEL_ID_EVENTS = "ad_events"
 
         /**
          * Known ad-SDK package prefixes. A window whose package starts with any of

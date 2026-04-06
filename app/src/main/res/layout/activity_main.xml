@@ -41,6 +41,21 @@
             android:background="@color/status_disabled_bg"
             android:textStyle="bold" />
 
+        <!-- Restricted Settings guidance banner (Android 13+ sideloaded apps) -->
+        <TextView
+            android:id="@+id/tvRestrictedSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:padding="12dp"
+            android:text="@string/status_restricted_settings"
+            android:textColor="#FFFFCC80"
+            android:background="#FFF57F17"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
         <!-- Notification permission status banner (Android 13+) -->
         <TextView
             android:id="@+id/tvNotificationStatus"
