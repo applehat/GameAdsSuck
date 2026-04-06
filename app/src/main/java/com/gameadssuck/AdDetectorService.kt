@@ -53,6 +53,9 @@ class AdDetectorService : AccessibilityService() {
     /** The package of the detected ad (for kill fallback). */
     private var currentAdPackage: String? = null
 
+    /** Tracks whether the last foreground event was the watched app returning. */
+    private var lastForegroundWasWatched = false
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // -----------------------------------------------------------------------
@@ -97,6 +100,12 @@ class AdDetectorService : AccessibilityService() {
             // Update tracking when user is inside a watched app.
             if (watchedAppsManager.isWatched(packageName)) {
                 currentWatchedPackage = packageName
+                if (isHandlingAd) {
+                    // The watched app came back to the foreground — the ad was dismissed.
+                    Log.i(TAG, "Watched app $packageName returned to foreground, ad dismissed")
+                    lastForegroundWasWatched = true
+                    resetHandlingState()
+                }
                 return
             }
 
@@ -338,8 +347,8 @@ class AdDetectorService : AccessibilityService() {
             if (idLower.contains(keyword)) return isClickableOrParent(node)
         }
 
-        // Tiny views (< 100dp) with "X" or "✕" text are almost certainly close buttons.
-        if (text.length <= 2 && (text == "X" || text == "x" || text == "✕" || text == "✖" || text == "×" || text == "╳")) {
+        // Tiny views with "X" or "✕" text are almost certainly close buttons.
+        if (text.length <= 2 && text in X_SYMBOLS) {
             return isClickableOrParent(node)
         }
 
@@ -350,8 +359,8 @@ class AdDetectorService : AccessibilityService() {
             node.getBoundsInScreen(bounds)
             val w = bounds.width()
             val h = bounds.height()
-            // Small icon-sized button.
-            if (w in 20..200 && h in 20..200) {
+            if (w in MIN_CLOSE_BUTTON_PX..MAX_CLOSE_BUTTON_PX &&
+                h in MIN_CLOSE_BUTTON_PX..MAX_CLOSE_BUTTON_PX) {
                 return isClickableOrParent(node)
             }
         }
@@ -383,8 +392,9 @@ class AdDetectorService : AccessibilityService() {
         node.getBoundsInScreen(bounds)
         val displayMetrics = resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels
-        // Top-right: x > 70% of screen, y < 20% of screen.
-        return bounds.left > screenWidth * 0.65 && bounds.top < displayMetrics.heightPixels * 0.25
+        // Top-right: x > 65% of screen, y < 25% of screen.
+        return bounds.left > screenWidth * TOP_RIGHT_X_THRESHOLD &&
+                bounds.top < displayMetrics.heightPixels * TOP_RIGHT_Y_THRESHOLD
     }
 
     /**
@@ -603,6 +613,15 @@ class AdDetectorService : AccessibilityService() {
         private const val RELAUNCH_DELAY_MS = 600L
         private const val COOLDOWN_MS = 4_000L
 
+        // Close-button detection thresholds.
+        private const val MIN_CLOSE_BUTTON_PX = 20
+        private const val MAX_CLOSE_BUTTON_PX = 200
+        private const val TOP_RIGHT_X_THRESHOLD = 0.65f
+        private const val TOP_RIGHT_Y_THRESHOLD = 0.25f
+
+        /** Characters commonly used as close-button labels. */
+        private val X_SYMBOLS = setOf("X", "x", "✕", "✖", "×", "╳")
+
         private const val NOTIFICATION_ID_SERVICE = 1001
         private const val NOTIFICATION_ID_AD_DETECTED = 1002
 
@@ -663,8 +682,6 @@ class AdDetectorService : AccessibilityService() {
             "com.kidoz",
             // Liftoff / Vungle
             "com.liftoff",
-            // Verve Group
-            "net.pubnative",
             // Bigo Ads
             "sg.bigo.ads"
         )
