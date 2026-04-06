@@ -104,14 +104,13 @@ class AdDetectorService : AccessibilityService() {
 
     private fun activeWindowLooksLikeAd(): Boolean {
         val rootNode = rootInActiveWindow ?: return false
+        var dismissNode: AccessibilityNodeInfo? = null
         return try {
-            val dismissNode = findDismissControl(rootNode)
-            try {
-                containsAdCopy(rootNode) && dismissNode != null
-            } finally {
-                dismissNode?.recycle()
-            }
+            if (!containsAdCopy(rootNode)) return false
+            dismissNode = findDismissControl(rootNode)
+            dismissNode != null
         } finally {
+            dismissNode?.recycle()
             rootNode.recycle()
         }
     }
@@ -154,6 +153,10 @@ class AdDetectorService : AccessibilityService() {
         }
     }
 
+    /**
+     * Searches the provided node tree for a dismiss control and returns a copied node that
+     * the caller must recycle. Intermediate child and parent nodes are recycled internally.
+     */
     private fun findDismissControl(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
         if (node == null) return null
 
@@ -183,6 +186,10 @@ class AdDetectorService : AccessibilityService() {
         return null
     }
 
+    /**
+     * Returns true if the provided node tree contains ad-like copy. Child nodes obtained while
+     * traversing are recycled internally; the caller remains responsible for the input node.
+     */
     private fun containsAdCopy(node: AccessibilityNodeInfo?): Boolean {
         if (node == null) return false
 
@@ -222,7 +229,7 @@ class AdDetectorService : AccessibilityService() {
         mainHandler.postDelayed({
             currentWatchedPackage = null
             isHandlingAd = false
-        }, POST_ACTION_SETTLE_MS)
+        }, RESET_DELAY_MS)
     }
 
     @SuppressLint("MissingPermission")
@@ -298,7 +305,7 @@ class AdDetectorService : AccessibilityService() {
 
     companion object {
         private const val DISMISS_RETRY_DELAY_MS = 700L
-        private const val POST_ACTION_SETTLE_MS = 1_500L
+        private const val RESET_DELAY_MS = 1_500L
         private const val COOLDOWN_MS = 5_000L
         private const val MAX_DISMISS_ATTEMPTS = 3
 
